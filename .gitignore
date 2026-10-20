@@ -1,0 +1,29 @@
+.DS_Store
+*.swp
+*.swo
+*.tmp
+*.log
+
+# Build artifacts
+build/
+DerivedData/
+*.dSYM/
+*.app
+
+# Swift/Xcode
+*.xcworkspace
+*.xcodeproj
+*.xcuserstate
+*.xcuserdata
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+
+# Local signing / provisioning
+*.mobileprovision
+*.p12
+
+# Editor / tooling
+.vscode/
+
+# OS junk
+Thumbs.db
