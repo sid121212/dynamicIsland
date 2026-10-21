@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleDisplayName</key><string>Dynamic Island</string>
+    <key>CFBundleExecutable</key><string>DynamicIslandMac</string>
+    <key>CFBundleIdentifier</key><string>local.siddharth.dynamicisland.modern</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>Dynamic Island</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.5.0</string>
+    <key>CFBundleVersion</key><string>10</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>Dynamic Island reads and controls the track playing in Music or Spotify.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>Dynamic Island shows your next calendar event in the expanded island.</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>Dynamic Island uses approximate location to show current weather.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>Dynamic Island Modern Live Activity</string>
+            <key>CFBundleURLSchemes</key><array><string>dynamicislandmac</string></array>
+        </dict>
+    </array>
+</dict>
+</plist>
