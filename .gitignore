@@ -4,7 +4,6 @@
 .build/
 *.xcuserstate
 xcuserdata/
-/repair-legacy-launchers.py
 DerivedData/
 *.dSYM/
 *.app

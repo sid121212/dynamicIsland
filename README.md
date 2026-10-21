@@ -1,63 +1,66 @@
-# Dynamic Island for Mac · 0.5.0
+# Dynamic Island for Mac
 
-A native Swift/AppKit Nook dashboard that grows from the hardware notch.
+A native Swift/AppKit Nook dashboard that grows from the Mac's hardware notch.
 
 ## Build and run
 
+Requires Apple Silicon, macOS 14 or later, and Xcode Command Line Tools.
+
 ```sh
-cd /Users/siddharthmehta/Documents/tools/DynamicIslandMac
 ./build.sh
 ./run.sh
 ```
 
-Apple Silicon and macOS 14 or later are required, with Xcode Command Line Tools installed. The current project is this directory. The obsolete checkout in Documents/DynamicIslandMac was removed.
+The app is built at `build/Dynamic Island.app`. The launcher starts that exact bundle and verifies its executable path.
 
-## Appearance and interaction
+## Interface
 
-The transparent, non-activating hosting window stays pinned to screen.frame.maxY. It is 40 points larger than the expanded shape in each dimension; it does not resize during transitions. One pure-black path changes size and corner radii inside it.
+- A single pure-black shape stays flush with the screen top, with concave upper corners and rounded lower corners.
+- Collapsed geometry follows the hardware notch, with a 200×32 virtual fallback.
+- Compact activities add 64-point wings on both sides without increasing notch height.
+- Expanded width is `min(560, max(500, notchWidth × 2.9))`; height is `notchHeight + 102`.
+- The Nook dashboard contains media playback and a seven-day calendar strip. Weather appears when enabled and loaded.
+- The Tray tab contains optional in-memory clipboard history. It keeps eight deduplicated text entries and displays three at a time; clicking restores an entry. Disabling it or quitting clears history.
+- The gear and menu-bar capsule open module settings, display selection and Launch at Login.
+- Hover expansion is intended after 150 ms and collapse after leaving for 300 ms. **Known issue:** pointer-triggered expansion needs a follow-up fix; use Toggle Island meanwhile.
 
-- Idle: exact hardware notch dimensions from safeAreaInsets and auxiliary menu-bar areas; 200×32 virtual notch fallback.
-- Compact: notch height with a 64-point wing on each side and an empty hardware-camera gap. Time and battery text are white; charging may use green.
-- HUD: volume/brightness symbol in the leading wing and a level bar in the trailing wing.
-- Expanded: width min(560, max(500, notchWidth × 2.9)); height notchHeight + 102. A 186×32 notch produces a 539.4×134 dashboard.
-- Concave upper radii: 6 points idle/compact, 20 expanded. Convex lower radii: 14 points idle/compact, 26 expanded. No outline. Expanded shadow: black 45%, radius 14, offset 6.
-- Expansion reveals fixed-size content after the spring is nearly settled. Collapse fades content before shrinking.
-- Hover expands after 150 ms; leaving for 300 ms collapses. Click the idle notch to pin it, or click outside to collapse.
-- Nook and Tray tabs both sit left of the camera. The gear on the right opens the module settings menu. Transparent shadow and ear margins do not capture clicks.
-
-The expanded dashboard uses a 44-point media-art square, title/artist, small source badge, thin progress track and plain SF Symbol playback controls. The calendar column shows a seven-day strip and up to two enabled calendar events. Weather appears as a neutral symbol and temperature only after data arrives. No debug controls, loading text or saturated button fills appear in the shipping surface.
-
-## Modules and permissions
-
-Use the gear or capsule menu-bar icon to toggle Now Playing, HUDs, power events, Calendar, Weather and Clipboard History.
-
-Music and Spotify provide track metadata/playback through Automation permission. Local Apple Music artwork is used when available; missing artwork uses a neutral music-note placeholder. Remote Spotify artwork is not downloaded.
-
-Calendar uses EventKit and macOS Calendar accounts, including iCloud and Google accounts configured in System Settings. Permission is requested when enabled. Weather requests location when enabled and sends coordinates to Open-Meteo for conditions.
-
-Clipboard History is off by default. Its Tray page has a Turn On button. Up to eight deduplicated text items remain in memory; three are visible at once. Clicking an entry copies it back. Disabling the module or quitting clears the history. Images and files are not retained.
-
-Disabled modules skip their associated sampling and requests; disabling Weather also cancels location and networking. No location, clipboard or calendar access occurs in the visual preview harness.
-
-## Verification and previews
+Debug builds expose test activity and timer controls in the Debug menu:
 
 ```sh
-./check.sh
-"./build/Dynamic Island.app/Contents/MacOS/DynamicIslandMac" --render-previews "$PWD/build/previews"
+./build.sh --debug
 ```
 
-LayoutChecks verifies top-edge anchoring, concave ear hit testing, transparent margins, fixed hosting dimensions, fade-before-shrink ordering, hardware-derived sizes and compact/HUD dismissal. The signed standalone bundle builds successfully.
+## Permissions and limitations
 
-The preview command writes six states at 2× resolution, with transparent and contrasting-background PNGs. The media preview uses sample metadata, not personal playback data. A side-by-side comparison with the user-supplied Nook reference is in build/previews/reference-comparison@2x.png.
+Music/Spotify metadata and controls use Automation permission. Local Apple Music artwork appears when available; remote Spotify artwork is not downloaded. Calendar uses EventKit and accounts configured in macOS. Weather requests Location when enabled and sends coordinates to Open-Meteo. Disabled modules skip associated sampling; disabling Weather cancels location and network activity.
 
-Live mouse, menu and screen placement verification for this version was blocked by the locked Mac; unlock and run ./run.sh to inspect it on the desktop. Offscreen rendering and geometry checks passed.
+Volume and brightness changes appear in the island, but Apple's own HUD remains. Brightness uses private DisplayServices and may not support external monitors. Secure Lock Screen rendering, arbitrary notification interception, Bluetooth batteries, Focus integration, camera mirror and simultaneous multi-display islands are not implemented.
 
-## Integrations and limits
+Launch at Login is most reliable with the app in `/Applications`.
+
+## Script integration
 
 ```sh
 ./notify.sh "Download complete" "archive.zip is ready" 8
 ```
 
-The local helper delivers a transient compact activity to the running app. Installed copies also register dynamicislandmac://. The bundle identifier remains local.siddharth.dynamicisland.modern.
+The arguments are title, subtitle and duration in seconds. A local helper delivers an atomic inbox message to the running app. Installed copies also register `dynamicislandmac://`.
 
-Apple's native volume/brightness HUD is not suppressed. Brightness uses private DisplayServices and may not support external monitors. Secure Lock Screen rendering, generic third-party notification capture, Bluetooth-device batteries, Focus integration, camera mirror and simultaneous islands on multiple displays are not implemented. Launch at Login is most reliable after moving the app to /Applications.
+## Checks
+
+```sh
+./build.sh
+./check.sh
+```
+
+Checks cover hardware-derived sizes, concave-ear hit testing, transparent margins, a fixed hosting window, transition ordering, and compact/HUD dismissal. They use an isolated model without reading personal data or requesting permissions.
+
+## Source layout
+
+- `Sources/DynamicIslandMac/main.swift`: app lifecycle, window, menu and input handling.
+- `Sources/DynamicIslandMac/NotchSurface.swift`: shape, animation and dashboard drawing.
+- `Sources/DynamicIslandMac/SystemMonitor.swift`: module data and lifecycle.
+- `Sources/DynamicIslandMac/Notify.swift`: local activity helper.
+- `Tests/main.swift`: layout regression checks.
+
+Generated apps, compiler caches and test executables stay under the ignored `build/` directory.

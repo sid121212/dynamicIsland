@@ -243,7 +243,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hoverExpansionTimer?.invalidate()
         hoverExpansionTimer = nil
-        guard islandView.expanded, islandView.timerEnd == nil, !islandView.pinned else { return }
+        guard islandView.expanded, !islandView.pinned else { return }
         guard hoverCollapseTimer == nil else { return }
         hoverCollapseTimer = Timer.scheduledTimer(withTimeInterval: 0.30, repeats: false) { [weak self] _ in
             guard let self else { return }
@@ -367,7 +367,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme == "dynamicislandmac" || url.scheme == "dynamicisland" {
+        for url in urls where url.scheme == "dynamicislandmac" {
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
             let values = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
             let title = values["title"] ?? "Live Activity"
@@ -379,23 +379,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let application = NSApplication.shared
-if CommandLine.arguments.contains("--render-previews") {
-    application.setActivationPolicy(.accessory)
-    let directory = URL(fileURLWithPath: CommandLine.arguments.last ?? "/tmp/nook-previews", isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let model = SystemMonitor(preview: true)
-    let notch = NSSize(width: 186, height: 32)
-    let expanded = NotchGeometry.expandedSize(notch: notch)
-    let view = IslandView(frame: NSRect(x: 0, y: 0, width: expanded.width + 40, height: expanded.height + 40), model: model)
-    view.configure(notch: notch)
-    let window = NSWindow(contentRect: view.bounds, styleMask: .borderless, backing: .buffered, defer: false)
-    window.contentView = view
-    for state in ["idle", "compact", "hud", "expanded", "tray"] { try view.renderPreview(state: state, directory: directory) }
-    model.usePreviewTrack()
-    try view.renderPreview(state: "media", directory: directory)
-    print("Rendered 2x previews to \(directory.path)")
-    exit(0)
-}
 private let applicationDelegate = AppDelegate()
 application.delegate = applicationDelegate
 application.run()

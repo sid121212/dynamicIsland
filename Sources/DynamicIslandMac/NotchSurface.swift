@@ -39,7 +39,6 @@ final class IslandView: NSView {
     var onGeometryChange: (() -> Void)?
     private(set) var expanded = false
     var pinned = false
-    var timerEnd: Date?
     var activity: IslandActivity? { didSet { needsDisplay = true } }
     private(set) var notchSize = IslandMetrics.idleSize
     private(set) var expandedSize = NotchGeometry.expandedSize(notch: IslandMetrics.idleSize)
@@ -71,7 +70,7 @@ final class IslandView: NSView {
 
     var shapeRect: NSRect { NSRect(x: (bounds.width - size.width) / 2, y: 0, width: size.width, height: size.height) }
     var shapePath: NSBezierPath { NotchGeometry.path(in: shapeRect, top: topRadius, bottom: bottomRadius) }
-    var isCompact: Bool { activity != nil || (model.musicEnabled && model.nowPlaying.isAvailable) || timerEnd != nil }
+    var isCompact: Bool { activity != nil || (model.musicEnabled && model.nowPlaying.isAvailable) }
 
     func configure(notch: NSSize) {
         notchSize = notch
@@ -198,35 +197,6 @@ final class IslandView: NSView {
         }
     }
 
-    func renderPreview(state: String, directory: URL) throws {
-        transitionTimer?.invalidate(); transitionTimer = nil
-        selectedTab = state == "tray" ? .tray : .nook
-        if state == "compact" {
-            activity = IslandActivity(kind: .notification, title: "Preview", subtitle: "", progress: nil, expiresAt: .distantFuture)
-        } else if state == "hud" {
-            activity = IslandActivity(kind: .volume, title: "Volume", subtitle: "", progress: 0.65, expiresAt: .distantFuture)
-        } else { activity = nil }
-        expanded = state == "expanded" || state == "tray" || state == "media"
-        transition(animated: false)
-        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-        bitmap.size = bounds.size
-        cacheDisplay(in: bounds, to: bitmap)
-        if let png = bitmap.representation(using: .png, properties: [:]) {
-            try png.write(to: directory.appendingPathComponent("\(state)@2x.png"))
-        }
-        let composite = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide, pixelsHigh: bitmap.pixelsHigh, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-        composite.size = bounds.size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: composite)
-        NSColor(calibratedRed: 0.23, green: 0.36, blue: 0.40, alpha: 1).setFill()
-        NSRect(origin: .zero, size: bounds.size).fill()
-        let foreground = NSImage(size: bounds.size); foreground.addRepresentation(bitmap)
-        foreground.draw(in: NSRect(origin: .zero, size: bounds.size))
-        NSGraphicsContext.restoreGraphicsState()
-        if let png = composite.representation(using: .png, properties: [:]) {
-            try png.write(to: directory.appendingPathComponent("\(state)-wallpaper@2x.png"))
-        }
-    }
     override func scrollWheel(with event: NSEvent) {
         if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY), abs(event.scrollingDeltaX) > 6,
            Date().timeIntervalSince(lastTrackGesture) > 0.5 {

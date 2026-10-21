@@ -163,11 +163,6 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         if let displayServicesHandle { dlclose(displayServicesHandle) }
     }
 
-    func usePreviewTrack() {
-        guard previewMode else { return }
-        nowPlaying = NowPlayingState(title: "A Quiet Morning", artist: "Sample Artist", duration: 240, position: 96, isPlaying: true, source: "Music")
-    }
-
     func post(title: String, subtitle: String, duration: TimeInterval = 5) {
         onActivity?(IslandActivity(kind: .notification, title: title, subtitle: subtitle, progress: nil, expiresAt: Date().addingTimeInterval(duration)))
     }
