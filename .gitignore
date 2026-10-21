@@ -5,3 +5,14 @@
 *.xcuserstate
 xcuserdata/
 /repair-legacy-launchers.py
+DerivedData/
+*.dSYM/
+*.app
+*.swp
+*.swo
+*.tmp
+*.log
+*.mobileprovision
+*.p12
+.vscode/
+Thumbs.db
