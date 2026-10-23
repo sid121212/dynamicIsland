@@ -6,7 +6,7 @@ import Foundation
 import IOKit.ps
 
 enum ActivityKind {
-    case volume, brightness, charging, battery, notification, timer
+    case volume, brightness, charging, battery, notification, timer, screenshot
 }
 
 struct IslandActivity {
@@ -15,55 +15,75 @@ struct IslandActivity {
     let subtitle: String
     let progress: Double?
     let expiresAt: Date
+    var trayItem: TrayItem? = nil
 }
 
-struct NowPlayingState {
-    var title = "Nothing playing"
-    var artist = "Start Music or Spotify"
-    var duration: Double = 0
-    var position: Double = 0
-    var isPlaying = false
-    var source = ""
-
-    var isAvailable: Bool { title != "Nothing playing" }
-}
-
-struct WeatherState {
-    let temperature: Int
-    let symbol: String
-    let description: String
-    var systemSymbol: String {
-        let value = description.lowercased()
-        if value.contains("thunder") { return "cloud.bolt.rain" }
-        if value.contains("snow") { return "cloud.snow" }
-        if value.contains("rain") || value.contains("drizzle") { return "cloud.rain" }
-        if value.contains("fog") { return "cloud.fog" }
-        if value.contains("overcast") { return "cloud.fill" }
-        if value.contains("cloud") { return "cloud.sun" }
-        return "sun.max"
-    }
-}
-
-final class SystemMonitor: NSObject, CLLocationManagerDelegate {
+@MainActor final class SystemMonitor: NSObject {
     var onChange: (() -> Void)?
     var onActivity: ((IslandActivity) -> Void)?
 
     private(set) var batteryPercent: Int?
     private(set) var isCharging = false
-    private(set) var volume: Double?
-    private(set) var brightness: Double?
-    private(set) var nowPlaying = NowPlayingState()
-    private(set) var nextEvent: EKEvent?
-    private(set) var todayEvents: [EKEvent] = []
-    private(set) var artwork: NSImage?
-    private(set) var weather: WeatherState?
-    private(set) var clipboardItems: [String] = []
+    let volumeControl = VolumeService()
+    let brightnessControl = BrightnessService()
+    private lazy var mediaKeys = MediaKeyTap(volume: volumeControl, brightness: brightnessControl)
+    var volume: Double? { volumeControl.isSupported ? volumeControl.level : nil }
+    var brightness: Double? { brightnessControl.isSupported ? brightnessControl.level : nil }
+    private var islandExpanded = false
+    private var levelActivityWork: DispatchWorkItem?
+    private var observedBrightnessWork: DispatchWorkItem?
+    private let media = NowPlayingService()
+    var nowPlaying: NowPlayingState { media.state }
+    func setMediaVisible(_ visible: Bool) { if !previewMode { media.setVisible(visible) } }
+    func seekMedia(to seconds: Double) { media.seek(to: seconds) }
+    func stopServices() {
+        media.stop()
+        mediaKeys.stop(); volumeControl.stop(); brightnessControl.stop()
+        levelActivityWork?.cancel(); observedBrightnessWork?.cancel()
+        pollTimer?.invalidate(); pollTimer = nil
+        calendarService.stop(); weatherService.stop()
+        clipboard.stop(); screenshotWatcher.stop(); trayStore.stop()
+    }
+    private let calendarService = CalendarService()
+    private let weatherService = WeatherService()
+    var calendarAccess: CalendarAccess { calendarService.access }
+    var todayEvents: [EKEvent] { calendarService.events }
+    var nextEvent: EKEvent? { todayEvents.first { $0.endDate > Date() } }
+    var weatherCity: String { weatherService.manualCity }
+    func setWeatherCity(_ city: String) { weatherService.setCity(city) }
+    func refreshWeather() { weatherService.refresh(force: true) }
+    func openCalendar() { calendarService.open() }
+    func syncCalendarAuthorization() {
+        if CalendarAccess.current() != calendarService.access { calendarService.refresh() }
+    }
+    var artwork: NSImage? { media.state.artwork }
+    var weather: WeatherState? { weatherService.state }
+    let trayStore = TrayStore()
+    lazy var clipboard = ClipboardMonitor(store: trayStore)
+    private lazy var screenshotWatcher = ScreenshotWatcher(store: trayStore)
+    private var trayVisible = false
+    func setTrayVisible(_ visible: Bool) {
+        guard visible != trayVisible else { return }; trayVisible = visible
+        if visible && !previewMode { trayStore.ensureLoaded() }
+    }
+    func restartScreenshots() { screenshotsEnabled = true; if !previewMode { screenshotWatcher.restart() } }
+    func startTrayServices() { configureTrayServices() }
+    private func configureTrayServices() {
+        guard !previewMode else { return }
+        if clipboardEnabled || screenshotsEnabled { trayStore.start() } else { trayStore.stop() }
+        if clipboardEnabled { clipboard.start() } else { clipboard.stop() }
+        if screenshotsEnabled { screenshotWatcher.start() } else { screenshotWatcher.stop() }
+    }
+    var screenshotsEnabled: Bool {
+        get { defaults.bool(forKey: "screenshotsEnabled") }
+        set { defaults.set(newValue, forKey: "screenshotsEnabled"); configureTrayServices(); onChange?() }
+    }
 
     var musicEnabled: Bool {
         get { defaults.object(forKey: "musicEnabled") as? Bool ?? true }
         set {
             defaults.set(newValue, forKey: "musicEnabled")
-            if !newValue { nowPlaying = NowPlayingState(); artwork = nil }
+            if newValue { media.start() } else { media.stop() }
             reconfigurePolling()
             onChange?()
         }
@@ -72,15 +92,43 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         get { defaults.object(forKey: "hudsEnabled") as? Bool ?? true }
         set {
             defaults.set(newValue, forKey: "hudsEnabled")
-            if !newValue {
-                volume = nil
-                brightness = nil
-                previousVolume = nil
-                previousBrightness = nil
-            }
-            reconfigurePolling()
+            configureLevelServices()
             onChange?()
         }
+    }
+    var controlsEnabled: Bool {
+        get { defaults.object(forKey: "controlsEnabled") as? Bool ?? true }
+        set {
+            defaults.set(newValue, forKey: "controlsEnabled")
+            configureLevelServices(); onChange?()
+        }
+    }
+    func configureDisplay(_ screen: NSScreen) { if !previewMode { brightnessControl.configure(screen: screen) } }
+    func setIslandState(expanded: Bool, controlsVisible: Bool, hudVisible: Bool) {
+        islandExpanded = expanded
+        if expanded { levelActivityWork?.cancel(); levelActivityWork = nil }
+        if !previewMode { brightnessControl.setVisible(controlsVisible || hudVisible) }
+    }
+    func refreshMediaKeyPermissions() { if !previewMode { mediaKeys.refreshPermissions() } }
+    private func configureLevelServices() {
+        guard !previewMode else { return }
+        if hudsEnabled || controlsEnabled { volumeControl.start(); brightnessControl.start() }
+        else { volumeControl.stop(); brightnessControl.stop() }
+        if hudsEnabled { mediaKeys.start() }
+        else {
+            mediaKeys.stop(); levelActivityWork?.cancel(); observedBrightnessWork?.cancel()
+            levelActivityWork = nil; observedBrightnessWork = nil
+        }
+    }
+    private func emitLevelActivity(_ kind: ActivityKind, level: Double) {
+        guard hudsEnabled, !islandExpanded else { return }
+        levelActivityWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.hudsEnabled, !self.islandExpanded else { return }
+            self.levelActivityWork = nil
+            self.onActivity?(IslandActivity(kind: kind, title: kind == .volume ? "Volume" : "Brightness", subtitle: "", progress: level, expiresAt: Date().addingTimeInterval(1.6)))
+        }
+        levelActivityWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 30, execute: work)
     }
     var powerEventsEnabled: Bool {
         get { defaults.object(forKey: "powerEventsEnabled") as? Bool ?? true }
@@ -99,7 +147,7 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         get { defaults.bool(forKey: "calendarEnabled") }
         set {
             defaults.set(newValue, forKey: "calendarEnabled")
-            if newValue { refreshCalendar() } else { nextEvent = nil; todayEvents = [] }
+            if newValue { calendarService.start() } else { calendarService.stop() }
             reconfigurePolling()
             onChange?()
         }
@@ -108,14 +156,7 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         get { defaults.bool(forKey: "weatherEnabled") }
         set {
             defaults.set(newValue, forKey: "weatherEnabled")
-            if newValue {
-                requestWeatherAccess()
-            } else {
-                weather = nil
-                locationManager.stopUpdatingLocation()
-                weatherTask?.cancel()
-                weatherTask = nil
-            }
+            if newValue { weatherService.start() } else { weatherService.stop() }
             onChange?()
         }
     }
@@ -123,25 +164,14 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         get { defaults.bool(forKey: "clipboardEnabled") }
         set {
             defaults.set(newValue, forKey: "clipboardEnabled")
-            if !newValue { clipboardItems.removeAll() }
-            previousPasteboardChange = NSPasteboard.general.changeCount
-            reconfigurePolling()
+            configureTrayServices()
             onChange?()
         }
     }
 
     private let defaults = UserDefaults.standard
-    private let eventStore = EKEventStore()
-    private let locationManager = CLLocationManager()
     private var pollTimer: Timer?
-    private var mediaPollInFlight = false
-    private var calendarPollCounter = 0
-    private var previousVolume: Double?
-    private var previousBrightness: Double?
     private var previousCharging: Bool?
-    private var previousPasteboardChange = NSPasteboard.general.changeCount
-    private var displayServicesHandle: UnsafeMutableRawPointer?
-    private var weatherTask: URLSessionDataTask?
     private let previewMode: Bool
 
     override convenience init() { self.init(preview: false) }
@@ -150,17 +180,42 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         previewMode = preview
         super.init()
         if preview { return }
-        locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        trayStore.onChange = { [weak self] in self?.onChange?() }
+        clipboard.onChange = { [weak self] in self?.onChange?() }
+        screenshotWatcher.onSaved = { [weak self] item in
+            self?.onActivity?(IslandActivity(kind: .screenshot, title: "Screenshot saved", subtitle: "Saved", progress: nil, expiresAt: Date().addingTimeInterval(2.5), trayItem: item))
+        }
+        volumeControl.onChange = { [weak self] changed in
+            guard let self else { return }
+            if changed { self.emitLevelActivity(.volume, level: self.volumeControl.isMuted ? 0 : self.volumeControl.level) }
+            self.onChange?()
+        }
+        brightnessControl.onChange = { [weak self] changed in
+            guard let self else { return }
+            if changed { self.emitLevelActivity(.brightness, level: self.brightnessControl.level) }
+            self.onChange?()
+        }
+        mediaKeys.onApplied = { [weak self] kind, level in self?.emitLevelActivity(kind, level: level) }
+        mediaKeys.onObservedBrightnessKey = { [weak self] in
+            guard let self else { return }
+            self.observedBrightnessWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.observedBrightnessWork = nil; self?.brightnessControl.refresh() }
+            self.observedBrightnessWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        }
+        configureLevelServices()
+        calendarService.onChange = { [weak self] in self?.onChange?() }
+        weatherService.onChange = { [weak self] in self?.onChange?() }
+        if calendarEnabled { calendarService.start() }
+        if weatherEnabled { weatherService.start() }
+        media.onChange = { [weak self] in self?.onChange?() }
+        if musicEnabled { media.start() }
         refreshAll(emitEvents: false)
         reconfigurePolling()
     }
 
     deinit {
         pollTimer?.invalidate()
-        weatherTask?.cancel()
-        locationManager.stopUpdatingLocation()
-        if let displayServicesHandle { dlclose(displayServicesHandle) }
     }
 
     func post(title: String, subtitle: String, duration: TimeInterval = 5) {
@@ -168,121 +223,44 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
     }
 
     func requestCalendarAccess() {
-        if #available(macOS 14.0, *) {
-            eventStore.requestFullAccessToEvents { [weak self] granted, _ in
-                DispatchQueue.main.async {
-                    self?.calendarEnabled = granted
-                    self?.refreshCalendar()
-                }
-            }
-        }
+        calendarEnabled = true
+        calendarService.requestAccess()
     }
 
     func requestWeatherAccess() {
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.startUpdatingLocation()
+        weatherEnabled = true
+        weatherService.requestLocationAccess()
     }
 
     func mediaCommand(_ command: String) {
-        guard nowPlaying.isAvailable else { return }
-        let app = nowPlaying.source == "Spotify" ? "Spotify" : "Music"
-        if command == "shuffle" {
-            let script = app == "Spotify"
-                ? "tell application \"Spotify\" to set shuffling to not shuffling"
-                : "tell application \"Music\" to set shuffle enabled to not shuffle enabled"
-            DispatchQueue.global(qos: .userInitiated).async {
-                var error: NSDictionary?
-                NSAppleScript(source: script)?.executeAndReturnError(&error)
-            }
-            return
-        }
-        let verb: String
         switch command {
-        case "previous": verb = "previous track"
-        case "next": verb = "next track"
-        default: verb = "playpause"
+        case "previous": media.previous()
+        case "next": media.next()
+        case "shuffle": media.shuffle()
+        default: media.togglePlayPause()
         }
-        let script = "tell application \"\(app)\" to \(verb)"
-        DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            NSAppleScript(source: script)?.executeAndReturnError(&error)
-        }
-    }
-
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard weatherEnabled, !previewMode else { return }
-        switch manager.authorizationStatus {
-        case .authorized, .authorizedAlways:
-            manager.startUpdatingLocation()
-        case .denied, .restricted:
-            weather = nil
-            onChange?()
-        default: break
-        }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard weatherEnabled, !previewMode, let location = locations.last else { return }
-        manager.stopUpdatingLocation()
-        fetchWeather(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
-    }
-
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        weather = nil
-        onChange?()
     }
 
     private func refreshAll(emitEvents: Bool) {
         if powerEventsEnabled { refreshPower(emitEvents: emitEvents) }
-        if hudsEnabled {
-            refreshAudio(emitEvents: emitEvents)
-            refreshBrightness(emitEvents: emitEvents)
-        }
-        if musicEnabled { refreshMedia() }
-        if clipboardEnabled { refreshClipboard() }
-        if calendarEnabled {
-            calendarPollCounter += 1
-            if calendarPollCounter >= 30 {
-                calendarPollCounter = 0
-                refreshCalendar()
-            }
-        }
         onChange?()
     }
 
     private func reconfigurePolling() {
         pollTimer?.invalidate()
         pollTimer = nil
-        guard musicEnabled || hudsEnabled || powerEventsEnabled || calendarEnabled || clipboardEnabled else { return }
+        guard powerEventsEnabled else { return }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.refreshAll(emitEvents: true)
+            MainActor.assumeIsolated { self?.refreshAll(emitEvents: true) }
         }
-    }
-
-    func copyClipboardItem(at index: Int) {
-        guard clipboardItems.indices.contains(index) else { return }
-        let value = clipboardItems[index]
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        previousPasteboardChange = NSPasteboard.general.changeCount
-    }
-
-    private func refreshClipboard() {
-        guard clipboardEnabled else { return }
-        let pasteboard = NSPasteboard.general
-        guard pasteboard.changeCount != previousPasteboardChange else { return }
-        previousPasteboardChange = pasteboard.changeCount
-        guard let value = pasteboard.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return }
-        clipboardItems.removeAll { $0 == value }
-        clipboardItems.insert(value, at: 0)
-        clipboardItems = Array(clipboardItems.prefix(8))
     }
 
     private func refreshPower(emitEvents: Bool) {
         guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let sources = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
         else { return }
+
+        DiagnosticsModel.shared.update(.battery, .degraded, "Power read succeeded; polling only, notifications not registered", event: emitEvents)
 
         var percent: Int?
         var charging = false
@@ -309,177 +287,4 @@ final class SystemMonitor: NSObject, CLLocationManagerDelegate {
         self.previousCharging = charging
     }
 
-    private func refreshAudio(emitEvents: Bool) {
-        guard let level = outputVolume() else { return }
-        volume = level
-        if emitEvents, hudsEnabled, let previousVolume, abs(previousVolume - level) > 0.005 {
-            onActivity?(IslandActivity(
-                kind: .volume,
-                title: level == 0 ? "Muted" : "Volume",
-                subtitle: "\(Int((level * 100).rounded()))%",
-                progress: level,
-                expiresAt: Date().addingTimeInterval(1.8)
-            ))
-        }
-        previousVolume = level
-    }
-
-    private func outputVolume() -> Double? {
-        var device = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr else { return nil }
-
-        var scalar: Float32 = 0
-        size = UInt32(MemoryLayout<Float32>.size)
-        address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        if AudioObjectGetPropertyData(device, &address, 0, nil, &size, &scalar) != noErr {
-            address.mElement = 1
-            guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &scalar) == noErr else { return nil }
-        }
-        return Double(scalar)
-    }
-
-    private func refreshBrightness(emitEvents: Bool) {
-        guard let level = displayBrightness() else { return }
-        brightness = level
-        if emitEvents, hudsEnabled, let previousBrightness, abs(previousBrightness - level) > 0.005 {
-            onActivity?(IslandActivity(
-                kind: .brightness,
-                title: "Brightness",
-                subtitle: "\(Int((level * 100).rounded()))%",
-                progress: level,
-                expiresAt: Date().addingTimeInterval(1.8)
-            ))
-        }
-        previousBrightness = level
-    }
-
-    private func displayBrightness() -> Double? {
-        typealias BrightnessFunction = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32
-        if displayServicesHandle == nil {
-            displayServicesHandle = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY)
-        }
-        guard let handle = displayServicesHandle,
-              let symbol = dlsym(handle, "DisplayServicesGetBrightness") else { return nil }
-        let function = unsafeBitCast(symbol, to: BrightnessFunction.self)
-        var value: Float = 0
-        guard function(CGMainDisplayID(), &value) == 0 else { return nil }
-        return Double(value)
-    }
-
-    private func refreshMedia() {
-        guard musicEnabled, !mediaPollInFlight else {
-            if !musicEnabled { nowPlaying = NowPlayingState() }
-            return
-        }
-        let running = NSWorkspace.shared.runningApplications
-        let source: String?
-        if running.contains(where: { $0.bundleIdentifier == "com.spotify.client" }) {
-            source = "Spotify"
-        } else if running.contains(where: { $0.bundleIdentifier == "com.apple.Music" }) {
-            source = "Music"
-        } else {
-            nowPlaying = NowPlayingState()
-            artwork = nil
-            return
-        }
-        guard let source else { return }
-        let oldTitle = nowPlaying.title
-        mediaPollInFlight = true
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let script: String
-            if source == "Spotify" {
-                script = "tell application \"Spotify\" to if player state is not stopped then return (name of current track) & \"|||\" & (artist of current track) & \"|||\" & ((duration of current track) / 1000) & \"|||\" & player position & \"|||\" & (player state is playing)"
-            } else {
-                script = "tell application \"Music\" to if player state is not stopped then return (name of current track) & \"|||\" & (artist of current track) & \"|||\" & (duration of current track) & \"|||\" & player position & \"|||\" & (player state is playing)"
-            }
-            var error: NSDictionary?
-            let output = NSAppleScript(source: script)?.executeAndReturnError(&error).stringValue ?? ""
-            let parts = output.components(separatedBy: "|||")
-            var artworkData: Data?
-            if source == "Music", parts.count >= 5, parts[0] != oldTitle {
-                artworkData = NSAppleScript(source: "tell application \"Music\" to get raw data of artwork 1 of current track")?.executeAndReturnError(&error).data
-            }
-            let trackArtwork = artworkData
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.mediaPollInFlight = false
-                guard self.musicEnabled else {
-                    self.nowPlaying = NowPlayingState()
-                    return
-                }
-                if parts.count >= 5 {
-                    if parts[0] != self.nowPlaying.title { self.artwork = trackArtwork.flatMap(NSImage.init(data:)) }
-                    self.nowPlaying = NowPlayingState(
-                        title: parts[0], artist: parts[1],
-                        duration: Double(parts[2]) ?? 0,
-                        position: Double(parts[3]) ?? 0,
-                        isPlaying: parts[4].lowercased() == "true",
-                        source: source
-                    )
-                } else {
-                    self.nowPlaying = NowPlayingState()
-                    self.artwork = nil
-                }
-                self.onChange?()
-            }
-        }
-    }
-
-    private func refreshCalendar() {
-        guard calendarEnabled, EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
-            nextEvent = nil
-            todayEvents = []
-            return
-        }
-        let start = Calendar.current.startOfDay(for: Date())
-        let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86400)
-        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
-        todayEvents = eventStore.events(matching: predicate).sorted { $0.startDate < $1.startDate }
-        nextEvent = todayEvents.first(where: { $0.endDate > Date() })
-        onChange?()
-    }
-
-    private func fetchWeather(latitude: Double, longitude: Double) {
-        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code&temperature_unit=celsius"
-        guard let url = URL(string: urlString) else { return }
-        weatherTask?.cancel()
-        weatherTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, self.weatherEnabled else { return }
-            guard let data,
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let current = root["current"] as? [String: Any],
-                  let temperature = current["temperature_2m"] as? Double,
-                  let code = current["weather_code"] as? Int else { return }
-            let condition = Self.weatherCondition(code)
-            DispatchQueue.main.async {
-                guard self.weatherEnabled else { return }
-                self.weather = WeatherState(temperature: Int(temperature.rounded()), symbol: condition.0, description: condition.1)
-                self.weatherTask = nil
-                self.onChange?()
-            }
-        }
-        weatherTask?.resume()
-    }
-
-    private static func weatherCondition(_ code: Int) -> (String, String) {
-        switch code {
-        case 0: return ("☀︎", "Clear")
-        case 1...3: return ("☁︎", "Cloudy")
-        case 45...48: return ("≋", "Fog")
-        case 51...67, 80...82: return ("☂︎", "Rain")
-        case 71...77, 85...86: return ("❄︎", "Snow")
-        case 95...99: return ("ϟ", "Storm")
-        default: return ("•", "Weather")
-        }
-    }
 }

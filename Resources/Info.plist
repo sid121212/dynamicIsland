@@ -11,12 +11,16 @@
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.5.0</string>
     <key>CFBundleVersion</key><string>10</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>Dynamic Island reads and controls the track playing in Music or Spotify.</string>
     <key>NSCalendarsFullAccessUsageDescription</key><string>Dynamic Island shows your next calendar event in the expanded island.</string>
     <key>NSLocationWhenInUseUsageDescription</key><string>Dynamic Island uses approximate location to show current weather.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>Dynamic Island shows battery status for connected Bluetooth devices when enabled.</string>
+    <key>NSDesktopFolderUsageDescription</key><string>Dynamic Island imports screenshots into your local Tray when enabled.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Dynamic Island accesses files you choose for your local Tray.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>Dynamic Island accesses files you choose for your local Tray.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

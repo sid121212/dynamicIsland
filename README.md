@@ -4,7 +4,7 @@ A native Swift/AppKit Nook dashboard that grows from the Mac's hardware notch.
 
 ## Build and run
 
-Requires Apple Silicon, macOS 14 or later, and Xcode Command Line Tools.
+Requires Apple Silicon, macOS 15 or later, Xcode Command Line Tools and CMake (`brew install cmake`). The media adapter source is vendored; builds do not download dependencies.
 
 ```sh
 ./build.sh
@@ -13,16 +13,45 @@ Requires Apple Silicon, macOS 14 or later, and Xcode Command Line Tools.
 
 The app is built at `build/Dynamic Island.app`. The launcher starts that exact bundle and verifies its executable path.
 
+Open **Diagnostics…** from the menu bar to inspect live service health and **Permissions…** to request access for enabled modules. To open Diagnostics immediately and save its status while visible:
+
+```sh
+./run.sh --diagnostics --diagnostics-report "$PWD/build/diagnostics.json"
+```
+
+Stable certificate setup is deferred at the user's request. Ad-hoc signing remains the default, with hardened runtime and explicit entitlements. Permission persistence across rebuilds is **unverified**. To use an existing local certificate later, run `SIGNING_IDENTITY=NotchDev ./build.sh`; a missing requested identity fails the build. Builds never reset privacy permissions automatically.
+
+## Install from a DMG
+
+```sh
+./package.sh
+```
+
+This creates a verified release disk image at `dist/DynamicIsland-0.5.0-arm64.dmg`, containing the app and an Applications shortcut. Quit the running development app, open the DMG, drag the app into Applications, and open it from Applications. Eject the DMG after copying. The app has no Dock icon; use its capsule menu-bar icon.
+
+The build is locally ad-hoc signed, not Apple-notarized. If macOS blocks the first launch, approve the locally built app through Finder's Open command or System Settings → Privacy & Security. Enable Launch at Login after installing the app in Applications.
+
+## Sharing with other users
+
+The DMG is a self-contained app bundle for Apple Silicon Macs (M1 or later) running macOS 15 or newer. Recipients do not need this repository, REA, Xcode, Homebrew, or CMake. They copy the app into `/Applications`, launch it, and grant permissions for the modules they enable. Launch at Login is optional. Each user has their own settings and local Tray history; packaging does not include your clipboard history or permissions.
+
+This build does not run on Intel Macs or Windows PCs. Intel support requires rebuilding the app and every bundled native helper/framework for x86_64 (or a universal build), then testing on Intel hardware. Windows requires a separate implementation.
+
+The current DMG is suitable for local testing, not a completed public release. For normal public downloads, use an Apple Developer Program Developer ID Application certificate, sign the nested code and app with hardened runtime and secure timestamps, notarize the distribution, staple the ticket, and test installation on a clean Mac with Gatekeeper enabled. The current local build uses ad-hoc signing and `--timestamp=none`; selecting a certificate alone does not finish this release pipeline. See [Apple's distribution guidance](https://developer.apple.com/macos/distribution/). Complete the outstanding manual acceptance checks in `MILESTONES.md` before publishing.
+
 ## Interface
 
 - A single pure-black shape stays flush with the screen top, with concave upper corners and rounded lower corners.
 - Collapsed geometry follows the hardware notch, with a 200×32 virtual fallback.
-- Compact activities add 64-point wings on both sides without increasing notch height.
+- Compact media/activities add 64-point wings per side; volume/brightness HUDs use 72-point wings. Both retain notch height.
 - Expanded width is `min(560, max(500, notchWidth × 2.9))`; height is `notchHeight + 102`.
-- The Nook dashboard contains media playback and a seven-day calendar strip. Weather appears when enabled and loaded.
-- The Tray tab contains optional in-memory clipboard history. It keeps eight deduplicated text entries and displays three at a time; clicking restores an entry. Disabling it or quitting clears history.
+- The Nook dashboard contains media playback and a seven-day calendar strip. Calendar shows permission actions until full access is granted, then up to two events with all-day events first. Clicking an event opens Calendar.
+- Weather appears as a top-row chip between the camera and gear when enabled and loaded. Click it or choose Weather Settings… to configure a city; automatic mode uses granted Location access or approximate IP location. Current and daily high/low data come from [Open-Meteo](https://open-meteo.com/en/docs), with a 15-minute cache and local temperature units. The chip hides offline.
+- Tray keeps persistent text, images, screenshots and copied files as horizontal cards. Use All/Images/Text/Files to filter; click a card to copy it, then use Command-V in the destination app. Hover for copy/pin/delete; Space or double-click opens Quick Look. Drag cards out as files, or use the context menu to Save/Reveal. Clear preserves pinned items; Clear All History in Tray Settings removes pins too.
+- Enable Clipboard History and Screenshots in Tray in the menu or Tray Settings. Screenshot capture leaves originals intact and shows a 2.5-second Saved activity; click it to open the item. History lives under `~/Library/Application Support/Dynamic Island/Tray/`, survives pause/relaunch, and defaults to 24-hour retention for unpinned items. Settings offer 1 hour, 24 hours, 7 days or never; limits are 100 unpinned items, 25 MB per image and 500 MB overall.
+- Controls is the third tab (sliders icon to the right of the camera when weather is present). It contains brightness/volume sliders, percentages and device names, with drag/scroll adjustment, speaker-click mute, press feedback and quarter-level haptics. The Controls menu toggle hides the tab.
 - The gear and menu-bar capsule open module settings, display selection and Launch at Login.
-- Hover expansion is intended after 150 ms and collapse after leaving for 300 ms. **Known issue:** pointer-triggered expansion needs a follow-up fix; use Toggle Island meanwhile.
+- Hover expansion is intended after 150 ms and collapse after leaving for 300 ms. An 8-point hover margin below the camera makes it reachable without capturing outside clicks. Pointer behavior awaits manual review; Toggle Island remains available.
 
 Debug builds expose test activity and timer controls in the Debug menu:
 
@@ -32,9 +61,15 @@ Debug builds expose test activity and timer controls in the Debug menu:
 
 ## Permissions and limitations
 
-Music/Spotify metadata and controls use Automation permission. Local Apple Music artwork appears when available; remote Spotify artwork is not downloaded. Calendar uses EventKit and accounts configured in macOS. Weather requests Location when enabled and sends coordinates to Open-Meteo. Disabled modules skip associated sampling; disabling Weather cancels location and network activity.
+Now Playing uses the bundled MediaRemote Adapter stream for system-wide metadata, artwork and commands. It runs a startup self-test, keeps paused metadata, and retries stream exits with bounded backoff. If unavailable, Music/Spotify distributed notifications and Automation provide a limited fallback. Progress updates run only while media is visible. See About for dependency credits and `Vendor/README.md` for the pinned source and license.
 
-Volume and brightness changes appear in the island, but Apple's own HUD remains. Brightness uses private DisplayServices and may not support external monitors. Secure Lock Screen rendering, arbitrary notification interception, Bluetooth batteries, Focus integration, camera mirror and simultaneous multi-display islands are not implemented.
+Calendar uses EventKit and accounts configured in macOS. Location access is requested only through Allow Location… or Permissions. Weather sends coordinates to Open-Meteo; automatic fallback uses [ipapi.co](https://ipapi.co/api/) to resolve approximate IP location when no city or granted Location fix is available. Calendar/Weather services stop their observers, timers and requests when disabled. Calendar, Weather and Controls/HUD checks passed user review; Tray image/screenshot capture and previews passed user review; its action and relaunch checks remain pending. See `MILESTONES.md`.
+
+The media-key tap requires Accessibility and Input Monitoring. It suppresses native volume/brightness HUDs only after a supported device write succeeds; failed/unsupported keys pass through. Without grants, Diagnostics reports observe-only mode and the native HUD may also appear. The user confirmed the Controls/HUD manual gate. Brightness uses private DisplayServices for the selected built-in display; external displays show “Not available on this display.” Brightness polling runs only while Controls/HUD is visible; CoreAudio listeners track volume.
+
+The Tray header has clipboard and camera switches: bright means enabled, dim means paused. Image and screenshot cards show previews, including images copied as Finder files.
+
+Clipboard capture ignores concealed/transient/generated data and password-manager app IDs by default. Exclusions are editable in Tray Settings. System clipboard denial appears in Diagnostics and links to Privacy & Security; the app does not override it. Screenshots may require Files & Folders access to the configured screenshot folder. Pausing capture does not erase history. Optional recording import and drop-in capture remain P2. Secure Lock Screen rendering, arbitrary notification interception, Bluetooth batteries, Focus integration, camera mirror and simultaneous multi-display islands are not implemented.
 
 Launch at Login is most reliable with the app in `/Applications`.
 
@@ -54,12 +89,22 @@ The arguments are title, subtitle and duration in seconds. A local helper delive
 ```
 
 Checks cover hardware-derived sizes, concave-ear hit testing, transparent margins, a fixed hosting window, transition ordering, and compact/HUD dismissal. They use an isolated model without reading personal data or requesting permissions.
+Media checks also cover split NDJSON records, microsecond units, diff merging, paused progress and clearing empty payloads. Passing these checks does not establish the manual playback acceptance tests.
+Tray checks use temporary storage and a private named pasteboard to test persistence, limits, retention, privacy exclusions, image conversion, screenshot timing and shutdown. The macOS sandbox may block that pasteboard; run these locally with desktop access. No test reads the general clipboard or your Desktop.
 
 ## Source layout
 
 - `Sources/DynamicIslandMac/main.swift`: app lifecycle, window, menu and input handling.
 - `Sources/DynamicIslandMac/NotchSurface.swift`: shape, animation and dashboard drawing.
 - `Sources/DynamicIslandMac/SystemMonitor.swift`: module data and lifecycle.
+- `Sources/DynamicIslandMac/CalendarService.swift`: authorization, event changes and daily scheduling.
+- `Sources/DynamicIslandMac/WeatherService.swift`: location/city resolution, forecasts, cache and network lifecycle.
+- `Sources/DynamicIslandMac/WeatherSettings.swift`: manual city and weather status window.
+- `Sources/DynamicIslandMac/VolumeService.swift`, `BrightnessService.swift`, `MediaKeyTap.swift`: level services and guarded media-key interception.
+- `Sources/DynamicIslandMac/LevelSliderView.swift`: native Controls sliders and interactions.
+- `Sources/DynamicIslandMac/TrayStore.swift`: background storage, dedupe and retention.
+- `Sources/DynamicIslandMac/ClipboardMonitor.swift`, `ScreenshotWatcher.swift`: capture lifecycles and diagnostics.
+- `Sources/DynamicIslandMac/TrayView.swift`, `TraySettings.swift`: cards, Quick Look, drag-out and settings.
 - `Sources/DynamicIslandMac/Notify.swift`: local activity helper.
 - `Tests/main.swift`: layout regression checks.
 

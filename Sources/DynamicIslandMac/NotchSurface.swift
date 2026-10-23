@@ -4,7 +4,7 @@ enum IslandMetrics {
     static let idleSize = NSSize(width: 200, height: 32)
 }
 
-enum IslandTab { case nook, tray }
+enum IslandTab { case nook, tray, controls }
 
 enum NotchGeometry {
     static func path(in rect: NSRect, top: CGFloat, bottom: CGFloat) -> NSBezierPath {
@@ -36,17 +36,20 @@ final class IslandView: NSView {
     let model: SystemMonitor
     var onExpansionChange: ((Bool) -> Void)?
     var onSettings: (() -> Void)?
+    var onWeatherSettings: (() -> Void)?
+    var onTraySettings: (() -> Void)?
+    var onTrayFocus: ((NSView?) -> Void)?
     var onGeometryChange: (() -> Void)?
     private(set) var expanded = false
     var pinned = false
-    var activity: IslandActivity? { didSet { needsDisplay = true } }
+    var activity: IslandActivity? { didSet { animateHUDFill(); needsDisplay = true } }
     private(set) var notchSize = IslandMetrics.idleSize
     private(set) var expandedSize = NotchGeometry.expandedSize(notch: IslandMetrics.idleSize)
     private var selectedTab: IslandTab = .nook
     private var size = IslandMetrics.idleSize
     private var topRadius: CGFloat = 6
     private var bottomRadius: CGFloat = 14
-    private var contentAlpha: CGFloat = 0
+    private var contentAlpha: CGFloat = 0 { didSet { updateControlsSurface() } }
     private var shapeExpansion: CGFloat = 0
     private var transitionTimer: Timer?
     private var transitionDestination: NSSize?
@@ -54,6 +57,13 @@ final class IslandView: NSView {
     private var hoveredPoint = NSPoint(x: -1, y: -1)
     private var lastTrackGesture = Date.distantPast
     private var compactClockTimer: Timer?
+    private var visualizerTimer: Timer?
+    private var barHeights: [CGFloat] = [4, 7, 5, 4]
+    private var traySurface: TrayView!
+    private var brightnessSlider: LevelSliderView!
+    private var volumeSlider: LevelSliderView!
+    private var hudLevel: Double = 0
+    private var hudTimer: Timer?
 
     init(frame: NSRect, model: SystemMonitor) {
         self.model = model
@@ -63,6 +73,14 @@ final class IslandView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Nook island")
+        brightnessSlider = LevelSliderView(control: model.brightnessControl, brightness: true, name: { [weak model] in model?.brightnessControl.name ?? "Display" })
+        volumeSlider = LevelSliderView(control: model.volumeControl, brightness: false, name: { [weak model] in model?.volumeControl.name ?? "Output" }, mute: { [weak model] in model?.volumeControl.toggleMute() })
+        addSubview(brightnessSlider); addSubview(volumeSlider)
+        traySurface = TrayView(model: model)
+        traySurface.onSettings = { [weak self] in self?.onTraySettings?() }
+        traySurface.onRequestFocus = { [weak self] view in self?.onTrayFocus?(view) }
+        addSubview(traySurface)
+        updateControlsSurface()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
@@ -83,20 +101,47 @@ final class IslandView: NSView {
         onExpansionChange?(value)
     }
     func refresh() {
+        if !model.controlsEnabled && selectedTab == .controls { selectedTab = .nook }
         transition(animated: true)
+        updateControlsSurface()
         needsDisplay = true
     }
     func containsShapePoint(_ point: NSPoint) -> Bool { shapePath.contains(point) }
-    override func hitTest(_ point: NSPoint) -> NSView? { containsShapePoint(point) ? self : nil }
+    func triggersHover(at point: NSPoint) -> Bool {
+        if expanded { return containsShapePoint(point) }
+        // The hardware camera area can be unreachable by the pointer. A small
+        // hover-only margin below it opens the shape without intercepting clicks.
+        return NSRect(x: bounds.midX - notchSize.width / 2 - 8, y: 0, width: notchSize.width + 16, height: notchSize.height + 8).contains(point)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { containsShapePoint(point) ? (super.hitTest(point) ?? self) : nil }
+    func wantsNativeMouse(at point: NSPoint) -> Bool {
+        if expanded && selectedTab == .tray && traySurface.frame.contains(point) { return true }
+        return expanded && selectedTab == .controls && model.controlsEnabled && (brightnessSlider.frame.contains(point) || volumeSlider.frame.contains(point))
+    }
     override func mouseDown(with event: NSEvent) { handleClick(at: convert(event.locationInWindow, from: nil)) }
     override func mouseMoved(with event: NSEvent) {
         hoveredPoint = convert(event.locationInWindow, from: nil)
+        toolTip = model.controlsEnabled && controlsRect.contains(hoveredPoint) ? "Controls (Brightness/Volume)" : nil
         needsDisplay = true
     }
 
     func transition(animated: Bool) {
+        model.setTrayVisible(expanded && selectedTab == .tray)
         let compact = isCompact && !expanded
-        let target = expanded ? expandedSize : NSSize(width: notchSize.width + (compact ? 128 : 0), height: notchSize.height)
+        let isHUD = activity?.kind == .volume || activity?.kind == .brightness
+        model.setIslandState(expanded: expanded, controlsVisible: expanded && selectedTab == .controls && model.controlsEnabled, hudVisible: compact && isHUD)
+        model.setMediaVisible((expanded && selectedTab == .nook) || compact)
+        if compact, activity == nil, model.nowPlaying.isPlaying {
+            if visualizerTimer == nil {
+                visualizerTimer = Timer.scheduledTimer(withTimeInterval: 0.125, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.barHeights = (0..<4).map { _ in CGFloat.random(in: 4...14) }
+                        self?.needsDisplay = true
+                    }
+                }
+            }
+        } else { visualizerTimer?.invalidate(); visualizerTimer = nil; barHeights = [4, 4, 4, 4] }
+        let target = expanded ? expandedSize : NSSize(width: notchSize.width + (compact ? (isHUD ? 144 : 128) : 0), height: notchSize.height)
         let targetTop: CGFloat = expanded ? 20 : 6
         let targetBottom: CGFloat = expanded ? 26 : 14
         if compact, compactClockTimer == nil {
@@ -158,24 +203,40 @@ final class IslandView: NSView {
     private var nookRect: NSRect { NSRect(x: dashboardOrigin + 34, y: (notchSize.height - 24) / 2, width: 60, height: 24) }
     private var trayRect: NSRect { NSRect(x: nookRect.maxX + 6, y: nookRect.minY, width: 56, height: 24) }
     private var gearRect: NSRect { NSRect(x: dashboardOrigin + expandedSize.width - 58, y: (notchSize.height - 24) / 2, width: 24, height: 24) }
-    private var turnOnRect: NSRect { NSRect(x: bounds.midX - 40, y: notchSize.height + 62, width: 80, height: 24) }
+    var controlsRect: NSRect {
+        let x = bounds.midX + notchSize.width / 2 + 8
+        let end = model.weatherEnabled && model.weather != nil ? weatherChipRect.minX : gearRect.minX
+        return NSRect(x: x, y: (notchSize.height - 24) / 2, width: max(24, min(82, end - x - 6)), height: 24)
+    }
+    var weatherChipRect: NSRect { NSRect(x: gearRect.minX - 62, y: (notchSize.height - 22) / 2, width: 54, height: 22) }
 
     func handleClick(at point: NSPoint) {
         guard containsShapePoint(point) else { return }
-        if !expanded { pinned = true; setExpanded(true); return }
+        if !expanded {
+            if let item = activity?.trayItem { select(.tray); traySurface.highlight(item.id) }
+            pinned = true; setExpanded(true); return
+        }
         if nookRect.contains(point) { select(.nook); return }
         if trayRect.contains(point) { select(.tray); return }
+        if model.controlsEnabled && controlsRect.contains(point) { select(.controls); return }
         if gearRect.contains(point) { onSettings?(); return }
-        if selectedTab == .tray {
-            if !model.clipboardEnabled, turnOnRect.contains(point) { model.clipboardEnabled = true; return }
-            for index in 0..<min(3, model.clipboardItems.count) {
-                if clipboardRow(index).contains(point) { model.copyClipboardItem(at: index); return }
-            }
+        if model.weatherEnabled, model.weather != nil, weatherChipRect.contains(point) { onWeatherSettings?(); return }
+        if selectedTab == .controls { return }
+        if selectedTab == .tray { return }
+        let mediaX = dashboardOrigin + 34
+        let calendarRect = NSRect(x: mediaX + 208, y: notchSize.height + 51, width: expandedSize.width - 276, height: 43)
+        if calendarRect.contains(point) {
+            if !model.calendarEnabled || model.calendarAccess != .authorized { model.requestCalendarAccess() }
+            else { model.openCalendar() }
             return
         }
-        let mediaX = dashboardOrigin + 34
         let controlsY = notchSize.height + 65
         if model.musicEnabled && model.nowPlaying.isAvailable {
+            let seekRect = NSRect(x: mediaX + 12, y: notchSize.height + 54, width: 152, height: 14)
+            if seekRect.contains(point), model.nowPlaying.duration > 0 {
+                model.seekMedia(to: max(0, min(1, (point.x - seekRect.minX) / seekRect.width)) * model.nowPlaying.duration)
+                return
+            }
             for (index, command) in ["previous", "toggle", "next"].enumerated() {
                 if NSRect(x: mediaX + CGFloat(index) * 48 + 12, y: controlsY - 4, width: 36, height: 28).contains(point) {
                     model.mediaCommand(command); return
@@ -187,6 +248,9 @@ final class IslandView: NSView {
     private func select(_ tab: IslandTab) {
         guard tab != selectedTab else { return }
         selectedTab = tab; contentAlpha = 0
+        model.setTrayVisible(expanded && tab == .tray)
+        model.setIslandState(expanded: expanded, controlsVisible: expanded && tab == .controls, hudVisible: false)
+        model.setMediaVisible(expanded && tab == .nook)
         tabTimer?.invalidate()
         let start = Date()
         tabTimer = Timer.scheduledTimer(withTimeInterval: 1 / 60.0, repeats: true) { [weak self] timer in
@@ -202,7 +266,11 @@ final class IslandView: NSView {
            Date().timeIntervalSince(lastTrackGesture) > 0.5 {
             lastTrackGesture = Date()
             if selectedTab == .nook, model.nowPlaying.isAvailable { model.mediaCommand(event.scrollingDeltaX > 0 ? "previous" : "next") }
-            else { select(selectedTab == .nook ? .tray : .nook) }
+            else {
+                let tabs: [IslandTab] = model.controlsEnabled ? [.nook, .tray, .controls] : [.nook, .tray]
+                let index = tabs.firstIndex(of: selectedTab) ?? 0
+                select(tabs[(index + 1) % tabs.count])
+            }
         } else if event.scrollingDeltaY < -4 { pinned = true; setExpanded(true) }
         else if event.scrollingDeltaY > 4 { pinned = false; setExpanded(false) }
     }
@@ -228,7 +296,7 @@ final class IslandView: NSView {
             context.scaleBy(x: scale, y: scale)
             context.beginTransparencyLayer(auxiliaryInfo: nil)
             drawHeader()
-            if selectedTab == .nook { drawDashboard() } else { drawTray() }
+            if selectedTab == .nook { drawDashboard() }
             context.endTransparencyLayer()
         } else if !expanded && transitionTimer == nil && isCompact { drawCompact() }
         NSGraphicsContext.restoreGraphicsState()
@@ -245,6 +313,24 @@ final class IslandView: NSView {
             text(title, rect: NSRect(x: rect.minX + 23, y: rect.minY + 5, width: rect.width - 27, height: 15), size: 11, weight: .semibold, color: color)
         }
         symbol("gearshape.fill", rect: gearRect.insetBy(dx: 6, dy: 6), color: secondary)
+        if model.controlsEnabled {
+            let rect = controlsRect
+            if selectedTab == .controls || rect.contains(hoveredPoint) {
+                NSColor.white.withAlphaComponent(selectedTab == .controls ? 0.14 : 0.08).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
+            }
+            let color = NSColor.white.withAlphaComponent(selectedTab == .controls ? 1 : 0.55)
+            symbol("slider.horizontal.3", rect: NSRect(x: rect.minX + 7, y: rect.minY + 6, width: 12, height: 12), color: color)
+            if rect.width >= 76 { text("Controls", rect: NSRect(x: rect.minX + 24, y: rect.minY + 5, width: 56, height: 15), size: 11, weight: .semibold, color: color) }
+        }
+        if model.weatherEnabled, let weather = model.weather {
+            let rect = weatherChipRect
+            NSColor.white.withAlphaComponent(0.07).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11).fill()
+            let color = NSColor.white.withAlphaComponent(0.85)
+            symbol(weather.systemSymbol, rect: NSRect(x: rect.minX + 8, y: rect.minY + 5, width: 11, height: 11), color: color)
+            text("\(weather.temperature)°", rect: NSRect(x: rect.minX + 23, y: rect.minY + 4, width: 28, height: 15), size: 11, weight: .semibold, color: color)
+        }
     }
 
     private func drawDashboard() {
@@ -255,18 +341,15 @@ final class IslandView: NSView {
         NSColor.white.withAlphaComponent(0.07).setFill()
         NSBezierPath(roundedRect: artRect, xRadius: 9, yRadius: 9).fill()
         if available, let art = model.artwork {
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(roundedRect: artRect, xRadius: 9, yRadius: 9).addClip()
-            art.draw(in: artRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            NSGraphicsContext.restoreGraphicsState()
+            drawArtwork(art, in: artRect, radius: 9)
         } else { symbol("music.note", rect: artRect.insetBy(dx: 13, dy: 13), color: tertiary) }
         text(available ? model.nowPlaying.title : "Not Playing", rect: NSRect(x: x + 52, y: y + 3, width: 132, height: 18), size: 13, weight: .semibold)
-        text(available ? model.nowPlaying.artist : "Open Music or Spotify", rect: NSRect(x: x + 52, y: y + 24, width: 132, height: 16), size: 11, color: secondary)
-        if available, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: model.nowPlaying.source == "Spotify" ? "com.spotify.client" : "com.apple.Music") {
-            NSWorkspace.shared.icon(forFile: url.path).draw(in: NSRect(x: x + 32, y: y + 32, width: 16, height: 16), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        text(available ? model.nowPlaying.artist : "Play audio in any app", rect: NSRect(x: x + 52, y: y + 24, width: 132, height: 16), size: 11, color: secondary)
+        if available, let icon = model.nowPlaying.appIcon {
+            icon.draw(in: NSRect(x: x + 32, y: y + 32, width: 16, height: 16), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
         if available && model.nowPlaying.duration > 0 {
-            progress(model.nowPlaying.position / model.nowPlaying.duration, rect: NSRect(x: x + 12, y: y + 53, width: 152, height: 3))
+            progress(model.nowPlaying.elapsed / model.nowPlaying.duration, rect: NSRect(x: x + 12, y: y + 53, width: 152, height: 3))
         }
         for (index, name) in ["backward.fill", available && model.nowPlaying.isPlaying ? "pause.fill" : "play.fill", "forward.fill"].enumerated() {
             let width: CGFloat = index == 1 ? 17 : 14
@@ -293,7 +376,12 @@ final class IslandView: NSView {
             }
             text(String(calendar.component(.day, from: date)), rect: NSRect(x: cx, y: y + 20, width: cell, height: 15), size: 11, weight: .medium, alignment: .center, digits: true)
         }
-        if model.calendarEnabled {
+        if model.calendarEnabled && model.calendarAccess != .authorized {
+            let button = NSRect(x: x, y: y + 50, width: min(width, 172), height: 25)
+            NSColor.white.withAlphaComponent(0.12).setFill()
+            NSBezierPath(roundedRect: button, xRadius: 12.5, yRadius: 12.5).fill()
+            text(model.calendarAccess.actionTitle, rect: button.offsetBy(dx: 0, dy: 5), size: 11, weight: .medium, alignment: .center)
+        } else if model.calendarEnabled {
             let events = model.todayEvents.prefix(2)
             if events.isEmpty {
                 symbol("calendar", rect: NSRect(x: x + 20, y: y + 59, width: 11, height: 11), color: tertiary)
@@ -303,48 +391,41 @@ final class IslandView: NSView {
                     let rowY = y + 49 + CGFloat(index) * 18
                     (NSColor(cgColor: event.calendar.cgColor) ?? .white).setFill()
                     NSBezierPath(roundedRect: NSRect(x: x, y: rowY + 2, width: 3, height: 13), xRadius: 1.5, yRadius: 1.5).fill()
-                    text(event.title ?? "Event", rect: NSRect(x: x + 9, y: rowY, width: width - 53, height: 16), size: 11, weight: .semibold)
-                    let time = event.isAllDay ? "All day" : DateFormatter.localizedString(from: event.startDate, dateStyle: .none, timeStyle: .short)
-                    text(time, rect: NSRect(x: x + width - 46, y: rowY + 1, width: 46, height: 15), size: 10, color: secondary, alignment: .right)
+                    text(event.title ?? "Event", rect: NSRect(x: x + 9, y: rowY, width: width - 107, height: 16), size: 11, weight: .semibold)
+                    let time = event.isAllDay ? "All day" : DateFormatter.localizedString(from: event.startDate, dateStyle: .none, timeStyle: .short) + "–" + DateFormatter.localizedString(from: event.endDate, dateStyle: .none, timeStyle: .short)
+                    text(time, rect: NSRect(x: x + width - 94, y: rowY + 1, width: 94, height: 15), size: 10, color: secondary, alignment: .right)
                 }
             }
         } else {
             text("Calendar is off", rect: NSRect(x: x, y: y + 57, width: width, height: 17), size: 11, color: secondary, alignment: .center)
         }
-        if model.weatherEnabled, let weather = model.weather {
-            symbol(weather.systemSymbol, rect: NSRect(x: x, y: y + 27, width: 10, height: 10), color: secondary)
-            text("\(weather.temperature)°", rect: NSRect(x: x + 11, y: y + 25, width: 23, height: 15), size: 10, weight: .medium, color: secondary)
-        }
     }
 
-    private func clipboardRow(_ index: Int) -> NSRect {
-        NSRect(x: dashboardOrigin + 34, y: notchSize.height + 8 + CGFloat(index) * 27, width: expandedSize.width - 68, height: 23)
-    }
-    private func drawTray() {
-        if !model.clipboardEnabled {
-            text("Clipboard History is off", rect: NSRect(x: dashboardOrigin + 34, y: notchSize.height + 8, width: expandedSize.width - 68, height: 18), size: 13, weight: .semibold, alignment: .center)
-            text("Turn it on in Settings", rect: NSRect(x: dashboardOrigin + 34, y: notchSize.height + 31, width: expandedSize.width - 68, height: 16), size: 11, color: secondary, alignment: .center)
-            NSColor.white.withAlphaComponent(0.14).setFill()
-            NSBezierPath(roundedRect: turnOnRect, xRadius: 12, yRadius: 12).fill()
-            text("Turn On", rect: turnOnRect.offsetBy(dx: 0, dy: 5), size: 11, weight: .semibold, alignment: .center)
-        } else if model.clipboardItems.isEmpty {
-            text("Copy text to begin", rect: NSRect(x: dashboardOrigin + 34, y: notchSize.height + 38, width: expandedSize.width - 68, height: 18), size: 13, weight: .semibold, alignment: .center)
-        } else {
-            for (index, value) in model.clipboardItems.prefix(3).enumerated() {
-                let rect = clipboardRow(index)
-                NSColor.white.withAlphaComponent(0.07).setFill()
-                NSBezierPath(roundedRect: rect, xRadius: 11.5, yRadius: 11.5).fill()
-                symbol("doc.on.clipboard", rect: NSRect(x: rect.minX + 9, y: rect.minY + 6, width: 11, height: 11), color: secondary)
-                text(value, rect: NSRect(x: rect.minX + 29, y: rect.minY + 4, width: rect.width - 41, height: 16), size: 11)
-            }
-        }
-    }
     private func drawCompact() {
         let rect = shapeRect, gapLeft = bounds.midX - notchSize.width / 2, gapRight = bounds.midX + notchSize.width / 2
         let iconY = (notchSize.height - 12) / 2
         if let activity, let level = activity.progress, activity.kind == .volume || activity.kind == .brightness {
-            symbol(activity.kind == .volume ? "speaker.wave.2.fill" : "sun.max.fill", rect: NSRect(x: rect.minX + 22, y: iconY, width: 14, height: 12), color: .white)
-            progress(level, rect: NSRect(x: gapRight + 10, y: notchSize.height / 2 - 2, width: 44, height: 4))
+            let name = activity.kind == .volume ? LevelSliderView.volumeSymbol(level: level, muted: model.volumeControl.isMuted) : (level < 0.34 ? "sun.min.fill" : "sun.max.fill")
+            symbol(name, rect: NSRect(x: gapLeft - 43, y: (notchSize.height - 14) / 2, width: 14, height: 14), color: .white)
+            let bar = NSRect(x: gapRight + 10, y: notchSize.height / 2 - 3, width: 52, height: 6)
+            NSColor.white.withAlphaComponent(0.2).setFill(); NSBezierPath(roundedRect: bar, xRadius: 3, yRadius: 3).fill()
+            NSGraphicsContext.saveGraphicsState(); NSBezierPath(roundedRect: bar, xRadius: 3, yRadius: 3).addClip()
+            NSColor.white.withAlphaComponent(0.95).setFill(); NSRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(hudLevel), height: bar.height).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        } else if let item = activity?.trayItem {
+            let thumb = NSRect(x: gapLeft - 40, y: (notchSize.height - 22) / 2, width: 22, height: 22)
+            if let image = TrayThumbnailCache.shared.image(item) { drawArtwork(image, in: thumb, radius: 6) }
+            else { symbol("camera.viewfinder", rect: thumb.insetBy(dx: 3, dy: 3), color: .white) }
+            text("Saved", rect: NSRect(x: gapRight + 14, y: (notchSize.height - 16) / 2, width: 42, height: 16), size: 11, weight: .medium)
+        } else if activity == nil, model.musicEnabled, model.nowPlaying.isAvailable {
+            let artworkRect = NSRect(x: gapLeft - 40, y: (notchSize.height - 22) / 2, width: 22, height: 22)
+            if let art = model.artwork { drawArtwork(art, in: artworkRect, radius: 6) }
+            else { symbol("music.note", rect: artworkRect.insetBy(dx: 4, dy: 4), color: .white) }
+            NSColor.white.setFill()
+            for (index, height) in barHeights.enumerated() {
+                let bar = NSRect(x: gapRight + 22 + CGFloat(index) * 4.5, y: (notchSize.height - height) / 2, width: 2.5, height: height)
+                NSBezierPath(roundedRect: bar, xRadius: 1.25, yRadius: 1.25).fill()
+            }
         } else {
             let formatter = DateFormatter(); formatter.dateFormat = "h:mm"
             text(formatter.string(from: Date()), rect: NSRect(x: rect.minX + 12, y: iconY - 1, width: gapLeft - rect.minX - 16, height: 16), size: 12, weight: .semibold, digits: true)
@@ -355,6 +436,48 @@ final class IslandView: NSView {
     }
 
     private var secondary: NSColor { .white.withAlphaComponent(0.55) }
+    private func updateControlsSurface() {
+        guard let brightnessSlider, let volumeSlider, let traySurface else { return }
+        let trayFrame = NSRect(x: (bounds.width - (expandedSize.width - 68)) / 2, y: notchSize.height + 4, width: expandedSize.width - 68, height: 90)
+        if traySurface.frame != trayFrame { traySurface.frame = trayFrame }
+        traySurface.isHidden = selectedTab != .tray || contentAlpha <= 0.001
+        traySurface.alphaValue = contentAlpha
+        if !traySurface.isHidden { traySurface.refresh() }
+        if selectedTab != .tray || !expanded { onTrayFocus?(nil) }
+        let width = min(472, expandedSize.width - 68)
+        let sliderWidth = (width - 12) / 2
+        let left = NSRect(x: bounds.midX - width / 2, y: notchSize.height + 8, width: sliderWidth, height: 76)
+        let right = left.offsetBy(dx: sliderWidth + 12, dy: 0)
+        if brightnessSlider.frame != left { brightnessSlider.frame = left }
+        if volumeSlider.frame != right { volumeSlider.frame = right }
+        for slider in [brightnessSlider, volumeSlider] {
+            slider.isHidden = selectedTab != .controls || !model.controlsEnabled || contentAlpha <= 0.001
+            slider.alphaValue = contentAlpha
+            slider.needsDisplay = true
+        }
+    }
+    private func animateHUDFill() {
+        hudTimer?.invalidate(); hudTimer = nil
+        guard let activity, activity.kind == .volume || activity.kind == .brightness, let target = activity.progress else { hudLevel = 0; return }
+        let initial = hudLevel, started = Date()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            let t = min(1, Date().timeIntervalSince(started) / 0.12)
+            self.hudLevel = initial + (max(0, min(1, target)) - initial) * (1 - pow(1 - t, 3))
+            self.needsDisplay = true
+            if t == 1 { timer.invalidate(); self.hudTimer = nil }
+        }
+        hudTimer = timer; RunLoop.main.add(timer, forMode: .common)
+    }
+    private func drawArtwork(_ image: NSImage, in rect: NSRect, radius: CGFloat) {
+        guard image.size.width > 0, image.size.height > 0 else { return }
+        let scale = max(rect.width / image.size.width, rect.height / image.size.height)
+        let destination = NSRect(x: rect.midX - image.size.width * scale / 2, y: rect.midY - image.size.height * scale / 2, width: image.size.width * scale, height: image.size.height * scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+        image.draw(in: destination, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+    }
     private var tertiary: NSColor { .white.withAlphaComponent(0.30) }
     private func symbol(_ name: String, rect: NSRect, color: NSColor) {
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: name)?

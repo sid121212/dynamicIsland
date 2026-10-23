@@ -1,8 +1,10 @@
 import AppKit
 import Foundation
 import ServiceManagement
+import Darwin
 
 private final class IslandPanel: NSPanel {
+    var allowsKey = false
     init() {
         super.init(
             contentRect: NSRect(origin: .zero, size: IslandMetrics.idleSize),
@@ -22,7 +24,7 @@ private final class IslandPanel: NSPanel {
         acceptsMouseMovedEvents = true
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { allowsKey }
 }
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -39,18 +41,46 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activityTimer: Timer?
     private var activityInboxTimer: Timer?
     private var preferredScreenIndex = -1
+    private lazy var permissions = PermissionsManager(model: model, diagnostics: .shared)
+    private lazy var diagnosticsWindow = DiagnosticsWindowController(model: .shared, permissions: permissions)
+    private lazy var weatherSettings = WeatherSettingsController(model: model)
+    private lazy var traySettings = TraySettingsController(model: model)
+    private var permissionWarnings: [ServiceID: NSMenuItem] = [:]
+    private var terminationSignals: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        for number in [SIGTERM, SIGINT] {
+            Darwin.signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+            source.resume(); terminationSignals.append(source)
+        }
         NSApp.setActivationPolicy(.accessory)
         configurePanel()
         configureMenuBar()
         observeScreens()
         connectModel()
         installClickMonitors()
+        permissions.refreshStatuses()
+        permissions.onWeatherSettings = { [weak self] in self?.weatherSettings.present() }
+        permissions.onTraySettings = { [weak self] in self?.traySettings.present() }
+        DiagnosticsModel.shared.refreshSignature()
+        if CommandLine.arguments.contains("--diagnostics") {
+            if let index = CommandLine.arguments.firstIndex(of: "--diagnostics-report"), index + 1 < CommandLine.arguments.count {
+                diagnosticsWindow.reportURL = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            }
+            diagnosticsWindow.present()
+        } else if !UserDefaults.standard.bool(forKey: "didPresentPermissionsV1") {
+            UserDefaults.standard.set(true, forKey: "didPresentPermissionsV1")
+            permissions.present()
+        }
+        model.startTrayServices()
         activityInboxTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.drainActivityInbox()
         }
     }
+
+    func applicationWillTerminate(_ notification: Notification) { model.stopServices() }
 
     private func configurePanel() {
         panel = IslandPanel()
@@ -64,6 +94,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.resizePanel(expanded: expanded)
         }
         islandView.onSettings = { [weak self] in self?.showSettings() }
+        islandView.onWeatherSettings = { [weak self] in self?.weatherSettings.present() }
+        islandView.onTraySettings = { [weak self] in self?.traySettings.present() }
+        islandView.onTrayFocus = { [weak self] view in
+            guard let self else { return }
+            if let view { self.panel.allowsKey = true; self.panel.makeKey(); self.panel.makeFirstResponder(view) }
+            else if self.panel.allowsKey { self.panel.allowsKey = false; self.panel.resignKey() }
+        }
         islandView.onGeometryChange = { [weak self] in
             guard let self else { return }
             self.panel.ignoresMouseEvents = !self.pointIsInsideShape(NSEvent.mouseLocation)
@@ -107,6 +144,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "capsule.fill", accessibilityDescription: "Dynamic Island")
+        statusItem.button?.image?.isTemplate = true
         let menu = NSMenu()
         let toggle = menu.addItem(withTitle: "Toggle Island", action: #selector(toggleIsland), keyEquivalent: "i")
         toggle.target = self
@@ -114,11 +152,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         recenterItem.target = self
         menu.addItem(.separator())
         menu.addItem(toggleItem("Now Playing", action: #selector(toggleMusic), enabled: model.musicEnabled))
+        addPermissionWarning(.nowPlaying, to: menu)
         menu.addItem(toggleItem("Volume & Brightness HUDs", action: #selector(toggleHUDs), enabled: model.hudsEnabled))
+        addPermissionWarning(.mediaKeys, to: menu)
+        menu.addItem(toggleItem("Controls (Brightness/Volume)", action: #selector(toggleControls), enabled: model.controlsEnabled))
         menu.addItem(toggleItem("Charging & Battery Events", action: #selector(togglePowerEvents), enabled: model.powerEventsEnabled))
         menu.addItem(toggleItem("Calendar Widget", action: #selector(toggleCalendar), enabled: model.calendarEnabled))
+        addPermissionWarning(.calendar, to: menu)
         menu.addItem(toggleItem("Weather Widget", action: #selector(toggleWeather), enabled: model.weatherEnabled))
+        let weatherSettingsItem = menu.addItem(withTitle: "Weather Settings…", action: #selector(showWeatherSettings), keyEquivalent: "")
+        weatherSettingsItem.target = self
+        addPermissionWarning(.location, to: menu)
         menu.addItem(toggleItem("Clipboard History", action: #selector(toggleClipboard), enabled: model.clipboardEnabled))
+        addPermissionWarning(.clipboard, to: menu)
+        menu.addItem(toggleItem("Screenshots in Tray", action: #selector(toggleScreenshots), enabled: model.screenshotsEnabled))
+        addPermissionWarning(.screenshots, to: menu)
+        let traySettingsItem = menu.addItem(withTitle: "Tray Settings…", action: #selector(showTraySettings), keyEquivalent: "")
+        traySettingsItem.target = self
+        let diagnostics = menu.addItem(withTitle: "Diagnostics…", action: #selector(showDiagnostics), keyEquivalent: "d")
+        diagnostics.target = self
+        let permissionsItem = menu.addItem(withTitle: "Permissions…", action: #selector(showPermissions), keyEquivalent: "")
+        permissionsItem.target = self
+        let about = menu.addItem(withTitle: "About Dynamic Island…", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
         #if DEBUG
         let debug = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
         let debugMenu = NSMenu()
@@ -162,6 +218,24 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.popUp(positioning: nil, at: point, in: islandView)
     }
 
+    @objc private func showDiagnostics() { diagnosticsWindow.present() }
+    @objc private func showAbout() {
+        let credits = NSAttributedString(string: "System-wide Now Playing uses MediaRemote Adapter.\nCopyright © 2025 Jonas van den Berg and contributors.\nBSD 3-Clause License · github.com/ungive/mediaremote-adapter\nFull license: app Contents/Resources/MediaRemoteAdapter-LICENSE.txt\nWeather data: Open-Meteo.com (CC BY 4.0). Approximate IP location: ipapi.co.")
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    @objc private func showPermissions() { permissions.present() }
+    @objc private func showWeatherSettings() { weatherSettings.present() }
+    @objc private func showTraySettings() { traySettings.present() }
+    private func addPermissionWarning(_ service: ServiceID, to menu: NSMenu) {
+        let item = NSMenuItem(title: "⚠ Needs permission", action: nil, keyEquivalent: "")
+        item.indentationLevel = 1
+        item.isEnabled = false
+        item.isHidden = DiagnosticsModel.shared.entries[service]?.severity != .failed
+        permissionWarnings[service] = item
+        menu.addItem(item)
+    }
+
     #if DEBUG
     @objc private func debugActivity() {
         model.post(title: "Test activity", subtitle: "Debug build", duration: 5)
@@ -183,13 +257,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let states: [String: Bool] = [
             "Now Playing": model.musicEnabled,
             "Volume & Brightness HUDs": model.hudsEnabled,
+            "Controls (Brightness/Volume)": model.controlsEnabled,
             "Charging & Battery Events": model.powerEventsEnabled,
             "Calendar Widget": model.calendarEnabled,
             "Weather Widget": model.weatherEnabled,
-            "Clipboard History": model.clipboardEnabled
+            "Clipboard History": model.clipboardEnabled,
+            "Screenshots in Tray": model.screenshotsEnabled
         ]
         for item in menu.items {
             if let enabled = states[item.title] { item.state = enabled ? .on : .off }
+        }
+        for (service, item) in permissionWarnings {
+            let diagnostics = DiagnosticsModel.shared
+            let missing = service == .mediaKeys ? (diagnostics.entries[.accessibility]?.severity == .failed || diagnostics.entries[.inputMonitoring]?.severity == .failed) : diagnostics.entries[service]?.severity == .failed
+            item.isHidden = !missing
+            item.toolTip = DiagnosticsModel.shared.entries[service]?.summary
         }
     }
 
@@ -207,6 +289,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self, event.window === self.panel, self.pointIsInsideShape(NSEvent.mouseLocation) else { return event }
+            let point = self.islandView.convert(self.panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+            if self.islandView.wantsNativeMouse(at: point) { return event }
             self.handleMonitoredClick()
             return nil
         }
@@ -227,8 +311,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateHoverState() {
-        let pointerIsInside = pointIsInsideShape(NSEvent.mouseLocation)
-        panel.ignoresMouseEvents = !pointerIsInside
+        let point = islandView.convert(panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        let pointerIsInside = islandView.triggersHover(at: point)
+        panel.ignoresMouseEvents = !pointIsInsideShape(NSEvent.mouseLocation)
         if pointerIsInside {
             hoverCollapseTimer?.invalidate()
             hoverCollapseTimer = nil
@@ -236,7 +321,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             hoverExpansionTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
                 guard let self else { return }
                 self.hoverExpansionTimer = nil
-                if self.pointIsInsideShape(NSEvent.mouseLocation) { self.islandView.setExpanded(true) }
+                let point = self.islandView.convert(self.panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+                if self.islandView.triggersHover(at: point) { self.islandView.setExpanded(true) }
             }
             return
         }
@@ -261,8 +347,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleHUDs(_ sender: NSMenuItem) {
         model.hudsEnabled.toggle()
+        if !model.hudsEnabled, islandView.activity?.kind == .volume || islandView.activity?.kind == .brightness {
+            activityTimer?.invalidate(); islandView.activity = nil; islandView.transition(animated: true)
+        }
         sender.state = model.hudsEnabled ? .on : .off
     }
+
+    @objc private func toggleControls(_ sender: NSMenuItem) { model.controlsEnabled.toggle(); sender.state = model.controlsEnabled ? .on : .off }
 
     @objc private func togglePowerEvents(_ sender: NSMenuItem) {
         model.powerEventsEnabled.toggle()
@@ -270,18 +361,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleCalendar(_ sender: NSMenuItem) {
-        if !model.calendarEnabled { model.requestCalendarAccess() } else { model.calendarEnabled = false }
+        if !model.calendarEnabled { permissions.activateForPermission(); model.requestCalendarAccess() } else { model.calendarEnabled = false }
         sender.state = model.calendarEnabled ? .on : .off
     }
 
     @objc private func toggleWeather(_ sender: NSMenuItem) {
         model.weatherEnabled.toggle()
+        if model.weatherEnabled { weatherSettings.present() }
         sender.state = model.weatherEnabled ? .on : .off
     }
 
     @objc private func toggleClipboard(_ sender: NSMenuItem) {
+        if !model.clipboardEnabled { permissions.activateForPermission() }
         model.clipboardEnabled.toggle()
+        if model.clipboardEnabled { traySettings.present() }
         sender.state = model.clipboardEnabled ? .on : .off
+    }
+    @objc private func toggleScreenshots(_ sender: NSMenuItem) {
+        if !model.screenshotsEnabled { permissions.activateForPermission() }
+        model.screenshotsEnabled.toggle(); sender.state = model.screenshotsEnabled ? .on : .off
     }
 
     @objc private func selectDisplay(_ sender: NSMenuItem) {
@@ -327,6 +425,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func positionPanel(size: NSSize) {
         guard let screen = targetScreen() else { return }
+        model.configureDisplay(screen)
         let origin = panelOrigin(on: screen, size: size)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
     }
@@ -380,5 +479,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 let application = NSApplication.shared
 private let applicationDelegate = AppDelegate()
-application.delegate = applicationDelegate
-application.run()
+MainActor.assumeIsolated {
+    application.delegate = applicationDelegate
+    application.run()
+}
