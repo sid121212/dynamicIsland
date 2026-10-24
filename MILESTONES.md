@@ -1,6 +1,6 @@
 # Verification checkpoint — 2026-10-23
 
-The requested Parts 1–8 are being implemented in order. Stable NotchDev certificate setup is explicitly deferred by the user; the build remains ad-hoc signed. Do not reset TCC automatically.
+The requested Parts 1–8 are being implemented in order. The current release pipeline uses the user-provided NotchDev self-signed identity and Sparkle key. Clean-Mac installation, TCC continuity and a two-version update still need manual acceptance. Do not reset TCC automatically.
 
 ## Part 1: Diagnostics and permission onboarding
 
@@ -63,3 +63,7 @@ Part 6 remaining menu polish; Part 7 remaining service extraction. Capture/previ
 | 8. Text/image/screenshot capture | Automated tests PASS; user confirmed copied images and saved screenshots appear with previews. Text/timing/Saved activity not separately confirmed |
 | 9. Tray copy, drag and exclusions | Automated exclusion/restore checks PASS; actual Notes/Finder interaction PENDING |
 | 10. Tray persistence and retention | Automated fresh-store/retention checks PASS; actual app relaunch PENDING |
+
+## Free release pipeline — 0.5.1 (11)
+
+Sparkle 2 is resolved through SwiftPM. The full app builds with NotchDev, including re-signed nested Sparkle helpers; deep strict verification passes. The first updater-enabled local candidate is 0.5.1 (11). Local DMG, ZIP, signed appcast and checksum were generated. No GitHub release/tag or signing secrets were published. See docs/RELEASING.md and docs/TESTING.md; clean-Mac and actual two-version acceptance remain not run. Earlier ad-hoc notes above describe historical builds.

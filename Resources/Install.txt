@@ -1,0 +1,17 @@
+Dynamic Island · Apple Silicon · macOS 15+
+Every public app is free to download and use. No account or license check.
+
+1. Compare the DMG's SHA-256 with the .sha256 asset on the GitHub release page.
+2. Drag Dynamic Island.app to Applications, then eject this disk image.
+3. Open the app from Applications. It lives in the menu bar; there is no Dock icon.
+
+This build is self-signed and not notarized by Apple. macOS may block it.
+After attempting to open this trusted download, go to System Settings > Privacy
+& Security, scroll to the security message, choose Open Anyway and confirm.
+Do not disable Gatekeeper or remove quarantine globally. Never install the
+signing certificate as a trusted root on a recipient's Mac.
+
+Updates: Check for Updates… in the menu bar. Update Settings… lets you turn
+automatic daily checks on or off. Updates work from Applications, not the DMG.
+The first-launch help window is visible only after macOS has allowed the app
+to start; these instructions are available before that approval.

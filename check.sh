@@ -24,6 +24,7 @@ xcrun swiftc \
   "$ROOT_DIR/Sources/DynamicIslandMac/DiagnosticsModel.swift" \
   "$ROOT_DIR/Sources/DynamicIslandMac/PermissionsManager.swift" \
   "$ROOT_DIR/Sources/DynamicIslandMac/NotchSurface.swift" \
+  "$ROOT_DIR/Sources/DynamicIslandMac/UpdatePolicy.swift" \
   "$ROOT_DIR/Tests/main.swift" \
   "$ROOT_DIR/Tests/TrayChecks.swift" \
   -o "$ROOT_DIR/build/LayoutChecks"

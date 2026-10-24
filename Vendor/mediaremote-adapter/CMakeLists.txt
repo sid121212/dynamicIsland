@@ -32,7 +32,9 @@ set(ADAPTER_SOURCES
     src/utility/helpers.m)
 set(HEADERS include/MediaRemoteAdapter.h)
 
-set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64")
+if(NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+endif()
 
 add_library(MediaRemoteAdapter SHARED ${ADAPTER_SOURCES})
 

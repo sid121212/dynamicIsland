@@ -4,7 +4,7 @@ A native Swift/AppKit Nook dashboard that grows from the Mac's hardware notch.
 
 ## Build and run
 
-Requires Apple Silicon, macOS 15 or later, Xcode Command Line Tools and CMake (`brew install cmake`). The media adapter source is vendored; builds do not download dependencies.
+Requires Apple Silicon, macOS 15 or later, current Xcode Command Line Tools (Swift 6.2+) and CMake from its official distribution. The media adapter source is vendored; SwiftPM resolves the pinned Sparkle dependency. No Homebrew is needed.
 
 ```sh
 ./build.sh
@@ -19,17 +19,19 @@ Open **Diagnostics…** from the menu bar to inspect live service health and **P
 ./run.sh --diagnostics --diagnostics-report "$PWD/build/diagnostics.json"
 ```
 
-Stable certificate setup is deferred at the user's request. Ad-hoc signing remains the default, with hardened runtime and explicit entitlements. Permission persistence across rebuilds is **unverified**. To use an existing local certificate later, run `SIGNING_IDENTITY=NotchDev ./build.sh`; a missing requested identity fails the build. Builds never reset privacy permissions automatically.
+Self-signed releases use the existing `NotchDev` identity and Sparkle 2. No paid Apple Developer account, notarization or Homebrew is required by the pipeline. Builds fail if the configured identity or public update key is missing. See [Releasing](docs/RELEASING.md) for signing, backups, CI secrets and publication, and [Testing](docs/TESTING.md) for clean-Mac and two-version update acceptance. Permission persistence still needs manual verification; builds never reset TCC.
 
 ## Install from a DMG
 
 ```sh
-./package.sh
+SIGNING_IDENTITY=NotchDev ./build.sh
+scripts/bootstrap-release-tools.sh
+scripts/package-artifacts.sh 0.5.1 11
 ```
 
-This creates a verified release disk image at `dist/DynamicIsland-0.5.0-arm64.dmg`, containing the app and an Applications shortcut. Quit the running development app, open the DMG, drag the app into Applications, and open it from Applications. Eject the DMG after copying. The app has no Dock icon; use its capsule menu-bar icon.
+This creates a verified release disk image at `dist/0.5.1/DynamicIsland-0.5.1.dmg`, containing the app and an Applications shortcut. Quit the running development app, open the DMG, drag the app into Applications, and open it from Applications. Eject the DMG after copying. The app has no Dock icon; use its capsule menu-bar icon.
 
-The build is locally ad-hoc signed, not Apple-notarized. If macOS blocks the first launch, approve the locally built app through Finder's Open command or System Settings → Privacy & Security. Enable Launch at Login after installing the app in Applications.
+The build is self-signed with NotchDev, not Apple-notarized. If macOS blocks the first launch, approve the locally built app through Finder's Open command or System Settings → Privacy & Security. Enable Launch at Login after installing the app in Applications.
 
 ## Sharing with other users
 
@@ -37,7 +39,7 @@ The DMG is a self-contained app bundle for Apple Silicon Macs (M1 or later) runn
 
 This build does not run on Intel Macs or Windows PCs. Intel support requires rebuilding the app and every bundled native helper/framework for x86_64 (or a universal build), then testing on Intel hardware. Windows requires a separate implementation.
 
-The current DMG is suitable for local testing, not a completed public release. For normal public downloads, use an Apple Developer Program Developer ID Application certificate, sign the nested code and app with hardened runtime and secure timestamps, notarize the distribution, staple the ticket, and test installation on a clean Mac with Gatekeeper enabled. The current local build uses ad-hoc signing and `--timestamp=none`; selecting a certificate alone does not finish this release pipeline. See [Apple's distribution guidance](https://developer.apple.com/macos/distribution/). Complete the outstanding manual acceptance checks in `MILESTONES.md` before publishing.
+The updater-enabled release candidate is 0.5.1 (build 11). It is self-signed, not notarized, and must pass the clean-Mac tests before a stable public release. Gatekeeper approval remains a first-install step; Sparkle's EdDSA verification protects subsequent update archives. Packaging and creating source files do not publish a release. Only the tagged release workflow or explicit publishing command does that. Complete `docs/TESTING.md` before publishing.
 
 ## Interface
 
@@ -109,3 +111,7 @@ Tray checks use temporary storage and a private named pasteboard to test persist
 - `Tests/main.swift`: layout regression checks.
 
 Generated apps, compiler caches and test executables stay under the ignored `build/` directory.
+
+## Auto-updates
+
+Check for Updates… and Update Settings… live in the menu bar. Automatic checks default to once a day and can be turned off. Apps started from a DMG or AppTranslocation show a Move to Applications alert and quit before the updater starts. The unnotarized first-launch guide is shown once per user. No membership or license service is called. See docs/RELEASING.md for the free GitHub release pipeline.

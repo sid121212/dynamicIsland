@@ -16,3 +16,22 @@ DerivedData/
 *.p12
 .vscode/
 Thumbs.db
+
+# Release credentials never belong in source control.
+*.key
+*.pem
+*.pfx
+*.keychain-db
+*.keychain
+*.private
+*.ed25519
+*.edkey
+*.secret
+.env*
+!.env.example
+/secrets/
+
+*private-key*
+
+__pycache__/
+*.pyc

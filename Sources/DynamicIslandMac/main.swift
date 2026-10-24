@@ -28,6 +28,10 @@ private final class IslandPanel: NSPanel {
 }
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let updates = AppUpdates()
+    #if !NOTARIZED
+    private let firstLaunchHelp = FirstLaunchHelp()
+    #endif
     private let model = SystemMonitor()
     private var panel: IslandPanel!
     private var islandView: IslandView!
@@ -49,6 +53,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationSignals: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        guard AppUpdates.allowLaunchFromCurrentLocation() else { NSApp.terminate(nil); return }
+        updates.start()
         for number in [SIGTERM, SIGINT] {
             Darwin.signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
@@ -70,9 +77,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 diagnosticsWindow.reportURL = URL(fileURLWithPath: CommandLine.arguments[index + 1])
             }
             diagnosticsWindow.present()
-        } else if !UserDefaults.standard.bool(forKey: "didPresentPermissionsV1") {
-            UserDefaults.standard.set(true, forKey: "didPresentPermissionsV1")
-            permissions.present()
+        } else {
+            let showPermissions: () -> Void = { [weak self] in
+                guard let self, !UserDefaults.standard.bool(forKey: "didPresentPermissionsV1") else { return }
+                UserDefaults.standard.set(true, forKey: "didPresentPermissionsV1")
+                self.permissions.present()
+            }
+            #if NOTARIZED
+            showPermissions()
+            #else
+            firstLaunchHelp.presentOnce(then: showPermissions)
+            #endif
         }
         model.startTrayServices()
         activityInboxTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -173,6 +188,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         diagnostics.target = self
         let permissionsItem = menu.addItem(withTitle: "Permissions…", action: #selector(showPermissions), keyEquivalent: "")
         permissionsItem.target = self
+        updates.addMenuItems(to: menu)
         let about = menu.addItem(withTitle: "About Dynamic Island…", action: #selector(showAbout), keyEquivalent: "")
         about.target = self
         #if DEBUG
@@ -220,7 +236,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showDiagnostics() { diagnosticsWindow.present() }
     @objc private func showAbout() {
-        let credits = NSAttributedString(string: "System-wide Now Playing uses MediaRemote Adapter.\nCopyright © 2025 Jonas van den Berg and contributors.\nBSD 3-Clause License · github.com/ungive/mediaremote-adapter\nFull license: app Contents/Resources/MediaRemoteAdapter-LICENSE.txt\nWeather data: Open-Meteo.com (CC BY 4.0). Approximate IP location: ipapi.co.")
+        let credits = NSAttributedString(string: "System-wide Now Playing uses MediaRemote Adapter.\nCopyright © 2025 Jonas van den Berg and contributors.\nBSD 3-Clause License · github.com/ungive/mediaremote-adapter\nFull license: app Contents/Resources/MediaRemoteAdapter-LICENSE.txt\nWeather data: Open-Meteo.com (CC BY 4.0). Approximate IP location: ipapi.co.\nUpdates: Sparkle (MIT and included third-party licenses).\nFull license: app Contents/Resources/Sparkle-LICENSE.txt")
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
         NSApp.activate(ignoringOtherApps: true)
     }
