@@ -24,5 +24,5 @@ notarized=os.environ.get('NOTARIZED','0')
 if notarized not in ('0','1'): sys.exit('NOTARIZED must be 0 or 1')
 info.update(SUFeedURL=f'{site}/downloads/{slug}/appcast.xml',ZDLContactEmail=contact,ZDLSiteURL=site,SUPublicEDKey=key,
             SUEnableAutomaticChecks=True,SUScheduledCheckInterval=86400,
-            CFBundleVersion=build,CFBundleShortVersionString=version)
+            CFBundleVersion=build,CFBundleShortVersionString=version,NSHumanReadableCopyright='© '+str(__import__('datetime').date.today().year)+' Zero Dollar Labs')
 if len(sys.argv)>1: pathlib.Path(sys.argv[1]).write_bytes(plistlib.dumps(info,fmt=plistlib.FMT_XML))

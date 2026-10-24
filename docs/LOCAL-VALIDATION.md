@@ -20,3 +20,11 @@ Built a separate QA app using SITE_URL=https://release-test.invalid and CONTACT_
 QA package is isolated under build/qa-selfhost-dist/0.5.1 (not dist/0.5.1): DMG 1,424,110 bytes, ZIP 1,605,327 bytes. DMG SHA-256 e774ffc3180dd1c24bcfafca6fa4705bde681bc54c15146db1af0b2ef72fe4da. Appcast has a single same-origin ZIP enclosure and embedded notes; independent CryptoKit verifies the ZIP's EdDSA signature. Sidecars exist for every non-sidecar asset, and the actual signed artifacts passed the site's mirror validator using a local API fixture (no remote publication).
 
 These are test-origin artifacts and must not be distributed. No production origin, CI secrets, hosting deployment, clean-Mac installation or two-version installed update has been validated. The older dist/0.5.1 package remains unchanged with its earlier feed. A new version/build with the real origin is required for distribution; an already-installed app with the private feed needs a manual installation of that new version.
+
+## Brand and bundled notices — 2026-10-25
+
+Final arm64 QA app built and signed with NotchDev; strict deep verification, public-host guard and required-license checks passed. Source feed URL and /downloads/notch/ prefix are preserved. Home / Clipboard / Controls titles are centralized, menu destinations use the configured website, and About opens bundled license/notices windows.
+
+Packaging output: build/final-brand-qa-dist/0.5.1 (QA only, not published). DMG 1,433,620 bytes; ZIP 1,614,083 bytes. The finished mounted DMG and bundled app both contain LICENSE.txt and THIRD-PARTY-NOTICES.txt. Generated appcast signature independently verifies against SUPublicEDKey. Release checks (10), healthcheck fixtures, regression checks and native typecheck passed.
+
+No clean-Mac first launch, installed update or human About-window test was performed (Mac locked). License text is a draft requiring review and governing-law completion. Do not publish the reused QA version/build 0.5.1/11; choose a new release version and increasing build.

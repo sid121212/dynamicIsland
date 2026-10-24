@@ -1,0 +1,38 @@
+Zero Dollar Labs Freeware License
+Identifier: zdl-freeware-1.0
+DRAFT: have it reviewed before relying on it
+
+Copyright © 2026 Zero Dollar Labs. All rights reserved except as granted below.
+
+1. Grant
+We grant you a non-exclusive license to download and use our unmodified tools for personal or commercial purposes on any number of devices that you own or control. No payment or account is required. This license is not an open-source license and does not transfer ownership.
+
+2. Restrictions
+You may not sell or resell a tool, redistribute modified copies, remove copyright or attribution notices, or claim ownership of our work. You may not reverse engineer, decompile or disassemble a tool except to the extent applicable law permits. Preserve included notices when retaining permitted copies. Third-party components are governed by their own terms, which take precedence for those components.
+
+3. Automatic updates
+Mac apps may use Sparkle to check for and install updates from our site. You control automatic checks in Update Settings. An update may include updated terms; review its notices. The initial download and update archives are self-signed, not notarized unless explicitly stated otherwise.
+
+4. Third-party components
+Included third-party components and weather data remain under their respective licenses. See Third-Party Notices. No rights granted by those licenses are restricted by this draft.
+
+5. Privacy and network calls
+We do not collect usage analytics, advertising profiles, accounts or license status. Local clipboard content and local tasks remain on your device. When enabled, Sparkle contacts the configured site host for the feed and archive; weather contacts api.open-meteo.com for forecasts and geocoding-api.open-meteo.com for an entered city. Requests include ordinary network metadata and, for weather, coordinates or a city. System Location Services are controlled by macOS. Providers may process request logs under their own terms. A problem report is an editable email draft and is never sent automatically.
+
+6. Voluntary support
+Support is optional. It is not a purchase of the tool, provides no extra license rights and is not proof that a payment completed. Payments and any refund requests are handled under the payment provider's terms. We do not receive your payment-card details. Your access to the free download does not depend on support.
+
+7. Warranty disclaimer
+To the fullest extent permitted by law, the software is provided AS IS and AS AVAILABLE, without warranties of any kind, including merchantability, fitness for a particular purpose and non-infringement. We do not guarantee availability, accuracy, compatibility or uninterrupted operation.
+
+8. Limitation of liability
+To the fullest extent permitted by law, we are not liable for indirect, incidental, special, consequential or punitive damages, or loss of data, profits or use arising from the software. Nothing here excludes rights or liability that applicable law does not allow us to exclude. Any enforceable aggregate liability cap requires legal review and remains TODO.
+
+9. Termination
+Your rights terminate if you materially breach this license. On termination, stop using the software and remove your copies, subject to any rights that applicable law preserves. Third-party rights remain governed by their respective licenses.
+
+10. Governing law
+TODO: choose the governing law and forum after legal review. Mandatory consumer rights remain unaffected.
+
+11. Contact
+{{CONTACT_EMAIL}}

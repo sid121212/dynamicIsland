@@ -1,0 +1,5 @@
+[
+  {"name":"Sparkle","license":"MIT and included third-party terms","attribution":"Copyright holders and full terms are reproduced below from the SwiftPM checkout."},
+  {"name":"MediaRemote Adapter","license":"BSD 3-Clause","attribution":"Copyright © 2025 Jonas van den Berg and contributors. Full terms follow below."},
+  {"name":"Open-Meteo weather data","license":"CC BY 4.0","attribution":"Weather data by Open-Meteo.com (https://open-meteo.com/). Data license: https://creativecommons.org/licenses/by/4.0/. API usage terms apply separately: https://open-meteo.com/en/terms."}
+]

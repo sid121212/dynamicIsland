@@ -3,7 +3,7 @@ import AppKit
 final class TraySettingsController: NSWindowController, NSWindowDelegate {
     private let model: SystemMonitor
     private let pause = NSButton(checkboxWithTitle: "Pause clipboard monitoring", target: nil, action: nil)
-    private let screenshots = NSButton(checkboxWithTitle: "Screenshots in Tray", target: nil, action: nil)
+    private let screenshots = NSButton(checkboxWithTitle: "Screenshots in Clipboard", target: nil, action: nil)
     private let retention = NSPopUpButton(frame: .zero, pullsDown: false)
     private let exclusions = NSTextView()
     private let status = NSTextField(wrappingLabelWithString: "")
@@ -12,7 +12,7 @@ final class TraySettingsController: NSWindowController, NSWindowDelegate {
     init(model: SystemMonitor) {
         self.model = model
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 570, height: 500), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Dynamic Island — Tray Settings"; window.isReleasedWhenClosed = false
+        window.title = "Dynamic Island — Clipboard Settings"; window.isReleasedWhenClosed = false
         super.init(window: window); window.delegate = self
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20); stack.translatesAutoresizingMaskIntoConstraints = false

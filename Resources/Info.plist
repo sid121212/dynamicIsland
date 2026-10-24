@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Dynamic Island</string>
+	<string>Notch</string>
 	<key>CFBundleExecutable</key>
 	<string>DynamicIslandMac</string>
 	<key>CFBundleIdentifier</key>
@@ -36,21 +36,23 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Dynamic Island reads and controls the track playing in Music or Spotify.</string>
+	<string>Notch reads and controls the track playing in Music or Spotify.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Dynamic Island shows battery status for connected Bluetooth devices when enabled.</string>
+	<string>Notch shows battery status for connected Bluetooth devices when enabled.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Dynamic Island shows your next calendar event in the expanded island.</string>
+	<string>Notch shows your next calendar event in the expanded island.</string>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>Dynamic Island imports screenshots into your local Tray when enabled.</string>
+	<string>Notch imports screenshots into your local Clipboard when enabled.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
-	<string>Dynamic Island accesses files you choose for your local Tray.</string>
+	<string>Notch accesses files you choose for your local Clipboard.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
-	<string>Dynamic Island accesses files you choose for your local Tray.</string>
+	<string>Notch accesses files you choose for your local Clipboard.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Zero Dollar Labs</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Dynamic Island uses approximate location to show current weather.</string>
+	<string>Notch uses approximate location to show current weather.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

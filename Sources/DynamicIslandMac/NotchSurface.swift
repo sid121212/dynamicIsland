@@ -4,6 +4,12 @@ enum IslandMetrics {
     static let idleSize = NSSize(width: 200, height: 32)
 }
 
+enum TabTitles {
+    static let all = ["Home", "Clipboard", "Controls"]
+    static var home: String { all[0] }
+    static var clipboard: String { all[1] }
+    static var controls: String { all[2] }
+}
 enum IslandTab { case nook, tray, controls }
 
 enum NotchGeometry {
@@ -72,7 +78,7 @@ final class IslandView: NSView {
         layer?.masksToBounds = false
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Nook island")
+        setAccessibilityLabel("Notch \(TabTitles.home)")
         brightnessSlider = LevelSliderView(control: model.brightnessControl, brightness: true, name: { [weak model] in model?.brightnessControl.name ?? "Display" })
         volumeSlider = LevelSliderView(control: model.volumeControl, brightness: false, name: { [weak model] in model?.volumeControl.name ?? "Output" }, mute: { [weak model] in model?.volumeControl.toggleMute() })
         addSubview(brightnessSlider); addSubview(volumeSlider)
@@ -121,7 +127,7 @@ final class IslandView: NSView {
     override func mouseDown(with event: NSEvent) { handleClick(at: convert(event.locationInWindow, from: nil)) }
     override func mouseMoved(with event: NSEvent) {
         hoveredPoint = convert(event.locationInWindow, from: nil)
-        toolTip = model.controlsEnabled && controlsRect.contains(hoveredPoint) ? "Controls (Brightness/Volume)" : nil
+        toolTip = model.weatherEnabled && weatherChipRect.contains(hoveredPoint) ? "Weather data by Open-Meteo.com (CC BY 4.0)" : model.controlsEnabled && controlsRect.contains(hoveredPoint) ? "Controls (Brightness/Volume)" : nil
         needsDisplay = true
     }
 
@@ -303,7 +309,7 @@ final class IslandView: NSView {
     }
 
     private func drawHeader() {
-        for (rect, title, symbolName, tab) in [(nookRect, "Nook", "house.fill", IslandTab.nook), (trayRect, "Tray", "tray.fill", IslandTab.tray)] {
+        for (rect, title, symbolName, tab) in [(nookRect, TabTitles.home, "house.fill", IslandTab.nook), (trayRect, TabTitles.clipboard, "tray.fill", IslandTab.tray)] {
             if selectedTab == tab || rect.contains(hoveredPoint) {
                 NSColor.white.withAlphaComponent(selectedTab == tab ? 0.14 : 0.08).setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
@@ -321,7 +327,7 @@ final class IslandView: NSView {
             }
             let color = NSColor.white.withAlphaComponent(selectedTab == .controls ? 1 : 0.55)
             symbol("slider.horizontal.3", rect: NSRect(x: rect.minX + 7, y: rect.minY + 6, width: 12, height: 12), color: color)
-            if rect.width >= 76 { text("Controls", rect: NSRect(x: rect.minX + 24, y: rect.minY + 5, width: 56, height: 15), size: 11, weight: .semibold, color: color) }
+            if rect.width >= 76 { text(TabTitles.controls, rect: NSRect(x: rect.minX + 24, y: rect.minY + 5, width: 56, height: 15), size: 11, weight: .semibold, color: color) }
         }
         if model.weatherEnabled, let weather = model.weather {
             let rect = weatherChipRect

@@ -103,4 +103,11 @@ if [[ "$1" == rev-parse ]]; then printf 'fixture-head\\n'; fi
    (app/'Contents/Resources/forbidden.txt').write_text('https://github.com/forbidden')
    result=subprocess.run([str(ROOT/'scripts/check-no-github.sh'),str(app)],capture_output=True,text=True)
    self.assertNotEqual(result.returncode,0);self.assertIn('Forbidden host',result.stderr)
+ def test_required_license_files(self):
+  with tempfile.TemporaryDirectory() as temp:
+   folder=pathlib.Path(temp)
+   for files in ([],['LICENSE.txt'],['LICENSE.txt','THIRD-PARTY-NOTICES.txt']):
+    for name in files:(folder/name).write_text('QA license fixture')
+    result=subprocess.run(['python3',str(ROOT/'scripts/check-license-files.py'),str(folder)],capture_output=True,text=True)
+    self.assertEqual(result.returncode==0,len(files)==2)
 if __name__=='__main__':unittest.main(verbosity=2)

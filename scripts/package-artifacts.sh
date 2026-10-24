@@ -29,11 +29,16 @@ ARTIFACT_DIR="${ARTIFACT_ROOT:-$ROOT_DIR/dist}/$RELEASE_VERSION"
 mkdir -p "$ARTIFACT_DIR" "$WORK_DIR/dmg" "$WORK_DIR/feed"
 ditto "$APP_DIR" "$WORK_DIR/dmg/Dynamic Island.app"
 cp "$ROOT_DIR/Resources/Install.txt" "$WORK_DIR/dmg/Install.txt"
+python3 scripts/check-license-files.py "$APP_DIR/Contents/Resources"
+cp "$APP_DIR/Contents/Resources/LICENSE.txt" "$APP_DIR/Contents/Resources/THIRD-PARTY-NOTICES.txt" "$WORK_DIR/dmg/"
+python3 scripts/check-license-files.py "$WORK_DIR/dmg"
 DMG="$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.dmg"
 "$CREATE_DMG" --volname 'Dynamic Island' --window-pos 200 120 --window-size 600 400 \
   --icon-size 100 --icon 'Dynamic Island.app' 150 170 --hide-extension 'Dynamic Island.app' \
   --app-drop-link 450 170 "$DMG" "$WORK_DIR/dmg"
 hdiutil verify "$DMG"
+# Verify the finished image, not only its staging folder.
+python3 scripts/check-dmg-notices.py "$DMG"
 ZIP="$WORK_DIR/feed/$STEM-$RELEASE_VERSION.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP"
 python3 scripts/check-artifact-sizes.py "$DMG" "$ZIP"

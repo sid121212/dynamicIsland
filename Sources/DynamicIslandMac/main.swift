@@ -29,6 +29,8 @@ private final class IslandPanel: NSPanel {
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updates = AppUpdates()
+    private var aboutWindow: NSWindow?
+    private var noticeWindows: [String: NSWindow] = [:]
     #if !NOTARIZED
     private let firstLaunchHelp = FirstLaunchHelp()
     #endif
@@ -180,9 +182,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         addPermissionWarning(.location, to: menu)
         menu.addItem(toggleItem("Clipboard History", action: #selector(toggleClipboard), enabled: model.clipboardEnabled))
         addPermissionWarning(.clipboard, to: menu)
-        menu.addItem(toggleItem("Screenshots in Tray", action: #selector(toggleScreenshots), enabled: model.screenshotsEnabled))
+        menu.addItem(toggleItem("Screenshots in Clipboard", action: #selector(toggleScreenshots), enabled: model.screenshotsEnabled))
         addPermissionWarning(.screenshots, to: menu)
-        let traySettingsItem = menu.addItem(withTitle: "Tray Settings…", action: #selector(showTraySettings), keyEquivalent: "")
+        let traySettingsItem = menu.addItem(withTitle: "Clipboard Settings…", action: #selector(showTraySettings), keyEquivalent: "")
         traySettingsItem.target = self
         let diagnostics = menu.addItem(withTitle: "Diagnostics…", action: #selector(showDiagnostics), keyEquivalent: "d")
         diagnostics.target = self
@@ -191,7 +193,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let report = menu.addItem(withTitle: "Report a Problem…", action: #selector(reportProblem), keyEquivalent: "")
         report.target = self
         updates.addMenuItems(to: menu)
-        let about = menu.addItem(withTitle: "About Dynamic Island…", action: #selector(showAbout), keyEquivalent: "")
+        let support = menu.addItem(withTitle: "Support Notch…", action: #selector(supportTool), keyEquivalent: "")
+        support.target = self
+        let suggestion = menu.addItem(withTitle: "Suggest a Feature…", action: #selector(suggestFeature), keyEquivalent: "")
+        suggestion.target = self
+        let about = menu.addItem(withTitle: "About Notch…", action: #selector(showAbout), keyEquivalent: "")
         about.target = self
         #if DEBUG
         let debug = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
@@ -226,7 +232,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let loginItem = toggleItem("Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), enabled: SMAppService.mainApp.status == .enabled)
         menu.addItem(loginItem)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Dynamic Island", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Notch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
     }
 
@@ -252,16 +258,52 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = components.url { NSWorkspace.shared.open(url) }
     }
     @objc private func showDiagnostics() { diagnosticsWindow.present() }
+    private func openSite(_ path: String) {
+        guard let origin = Bundle.main.object(forInfoDictionaryKey: "ZDLSiteURL") as? String,
+              let url = URL(string: origin + path) else { return }
+        NSWorkspace.shared.open(url)
+    }
+    @objc private func supportTool() { openSite("/tools/notch/#support") }
+    @objc private func suggestFeature() { openSite("/community/") }
     @objc private func showAbout() {
-        let credits = NSAttributedString(string: "System-wide Now Playing uses MediaRemote Adapter.\nCopyright © 2025 Jonas van den Berg and contributors.\nBSD 3-Clause License\nFull license: app Contents/Resources/MediaRemoteAdapter-LICENSE.txt\nWeather data: Open-Meteo.com (CC BY 4.0).\nUpdates: Sparkle (MIT and included third-party licenses).\nFull license: app Contents/Resources/Sparkle-LICENSE.txt")
-        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
-        NSApp.activate(ignoringOtherApps: true)
+        if let aboutWindow { aboutWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "About Notch"; window.isReleasedWhenClosed = false
+        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
+        stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        let heading = NSTextField(labelWithString: "Notch \(version) (\(build))"); heading.font = .systemFont(ofSize: 24, weight: .semibold)
+        stack.addArrangedSubview(heading)
+        stack.addArrangedSubview(NSTextField(labelWithString: "© \(Calendar.current.component(.year, from: Date())) Zero Dollar Labs"))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "Weather data by Open-Meteo.com (CC BY 4.0). Updates by Sparkle. System-wide Now Playing uses MediaRemote Adapter."))
+        let buttons = NSStackView()
+        buttons.addArrangedSubview(NSButton(title: "View License…", target: self, action: #selector(viewLicense)))
+        buttons.addArrangedSubview(NSButton(title: "Third-Party Notices…", target: self, action: #selector(viewNotices)))
+        stack.addArrangedSubview(buttons); window.contentView = stack; window.center()
+        aboutWindow = window; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+    @objc private func viewLicense() { showBundledNotice("LICENSE", title: "Zero Dollar Labs Freeware License") }
+    @objc private func viewNotices() { showBundledNotice("THIRD-PARTY-NOTICES", title: "Third-Party Notices") }
+    private func showBundledNotice(_ name: String, title: String) {
+        if let existing = noticeWindows[name] { existing.makeKeyAndOrderFront(nil); return }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
+              let content = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 560), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = title; window.isReleasedWhenClosed = false
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true
+        let text = NSTextView(); text.isEditable = false; text.isSelectable = true; text.string = content
+        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular); text.textContainerInset = NSSize(width: 20, height: 20)
+        text.autoresizingMask = [.width]; text.isVerticallyResizable = true; text.isHorizontallyResizable = false
+        text.textContainer?.widthTracksTextView = true
+        scroll.documentView = text; window.contentView = scroll; text.frame.size.width = scroll.contentSize.width
+        noticeWindows[name] = window; window.center(); window.makeKeyAndOrderFront(nil)
     }
     @objc private func showPermissions() { permissions.present() }
     @objc private func showWeatherSettings() { weatherSettings.present() }
     @objc private func showTraySettings() { traySettings.present() }
     private func addPermissionWarning(_ service: ServiceID, to menu: NSMenu) {
-        let item = NSMenuItem(title: "⚠ Needs permission", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: "Needs permission", action: nil, keyEquivalent: "")
         item.indentationLevel = 1
         item.isEnabled = false
         item.isHidden = DiagnosticsModel.shared.entries[service]?.severity != .failed
@@ -295,7 +337,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             "Calendar Widget": model.calendarEnabled,
             "Weather Widget": model.weatherEnabled,
             "Clipboard History": model.clipboardEnabled,
-            "Screenshots in Tray": model.screenshotsEnabled
+            "Screenshots in Clipboard": model.screenshotsEnabled
         ]
         for item in menu.items {
             if let enabled = states[item.title] { item.state = enabled ? .on : .off }

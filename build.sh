@@ -42,6 +42,8 @@ text=text.replace('Portable C implementation of Ed25519, from https://github.com
 pathlib.Path(sys.argv[2]).write_text(text)
 PYLICENSE
 
+python3 "$ROOT_DIR/scripts/generate-notices.py" "$APP_DIR/Contents/Resources"
+
 xcrun swiftc \
   -default-isolation MainActor \
   "${SWIFT_FLAGS[@]}" \
@@ -92,4 +94,5 @@ xcrun swiftc \
 
 "$ROOT_DIR/scripts/sign-app.sh" "$APP_DIR"
 "$ROOT_DIR/scripts/check-no-github.sh" "$APP_DIR"
+python3 "$ROOT_DIR/scripts/check-license-files.py" "$APP_DIR/Contents/Resources"
 echo "$APP_DIR"

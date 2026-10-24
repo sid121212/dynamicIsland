@@ -17,7 +17,7 @@ final class WeatherSettingsController: NSWindowController, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor)])
-        let note = NSTextField(wrappingLabelWithString: "Choose a city, or use automatic location. Automatic uses Location permission when granted. If location is unavailable, enter a city. Weather is provided by Open-Meteo and cached for 15 minutes.")
+        let note = NSTextField(wrappingLabelWithString: "Choose a city, or use automatic location. Automatic uses Location permission when granted. If location is unavailable, enter a city. Weather data by Open-Meteo.com (CC BY 4.0), cached for 15 minutes.")
         note.font = .systemFont(ofSize: 12); note.widthAnchor.constraint(equalToConstant: 490).isActive = true
         stack.addArrangedSubview(note)
         city.placeholderString = "City, country or region (for example, Pune, India)"
