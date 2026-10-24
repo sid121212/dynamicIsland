@@ -3,17 +3,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 REPO="${GITHUB_REPOSITORY:-$(python3 -c 'import json;print(json.load(open("release.config.json"))["repository"])')}"
-STEM="$(python3 -c 'import json;print(json.load(open("release.config.json"))["assetStem"])')"
+: "${SITE_URL:?Set SITE_URL to your public HTTPS origin}"
+SLUG="$(python3 -c 'import json;print(json.load(open("release.config.json"))["slug"])')"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 FAILED=0
-if ! VERSION="$(gh api "repos/$REPO/releases/latest" --jq '.tag_name')"; then
-  FAILED=1; VERSION='unavailable'
-fi
-# A versioned asset is selected from the latest stable release, not a guessed fixed filename.
-VERSION="${VERSION#v}"
-DMG="https://github.com/$REPO/releases/latest/download/$STEM-$VERSION.dmg"
-FEED="https://github.com/$REPO/releases/latest/download/appcast.xml"
+DMG="${SITE_URL%/}/download/$SLUG/"
+FEED="${SITE_URL%/}/downloads/$SLUG/appcast.xml"
 printf 'Daily public download check\n\n' > "$WORK_DIR/body.md"
 for url in "$DMG" "$FEED"; do
   CODE="$(curl -I -L --silent --show-error --max-time 60 --retry 2 --output /dev/null --write-out '%{http_code}' "$url")" || CODE='request-failed'

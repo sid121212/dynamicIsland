@@ -10,7 +10,7 @@ if args[0]=='api': print('v0.5.1')
 elif args[:2]==['issue','list'] and os.environ.get('MOCK_EXISTING')=='1':print('7')
 ''');gh.chmod(0o755)
  curl=bin/'curl';curl.write_text('#!/bin/sh\nprintf "%s" "${MOCK_CODE:-200}"\n');curl.chmod(0o755)
- env={**os.environ,'PATH':str(bin)+':'+os.environ['PATH'],'MOCK_LOG':str(logs),'GITHUB_REPOSITORY':'example/notch'}
+ env={**os.environ,'PATH':str(bin)+':'+os.environ['PATH'],'MOCK_LOG':str(logs),'GITHUB_REPOSITORY':'example/notch','SITE_URL':'https://downloads.test.invalid'}
  for code,existing,expect,operation in [('200','0',0,None),('404','0',1,'create'),('500','1',1,'comment')]:
   logs.write_text('');result=subprocess.run([str(root/'scripts/healthcheck.sh')],env={**env,'MOCK_CODE':code,'MOCK_EXISTING':existing},capture_output=True,text=True)
   assert result.returncode==expect,(code,result.stderr)

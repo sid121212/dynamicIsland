@@ -152,7 +152,7 @@ enum WeatherFailure: LocalizedError {
     private func resolveFallback() {
         guard enabled, task == nil, online != false else { return }
         let token = generation, city = manualCity
-        DiagnosticsModel.shared.update(.weather, .degraded, city.isEmpty ? "Resolving approximate city by IP" : "Looking up manual city")
+        DiagnosticsModel.shared.update(.weather, .degraded, city.isEmpty ? "Choose a city in Weather Settings" : "Looking up manual city")
         task = Task { [weak self] in
             guard let self, !Task.isCancelled, self.enabled, self.generation == token else { return }
             defer { if self.generation == token { self.task = nil } }
@@ -167,11 +167,7 @@ enum WeatherFailure: LocalizedError {
                     guard let found = try JSONDecoder().decode(Response.self, from: data).results?.first else { throw WeatherFailure.message("City not found — refine the city name in Weather Settings") }
                     latitude = found.latitude; longitude = found.longitude; resolvedCity = found.name
                 } else {
-                    let data = try await Self.get(URL(string: "https://ipapi.co/json/")!, label: "IP location")
-                    struct Response: Decodable { let latitude: Double?; let longitude: Double?; let city: String? }
-                    let value = try JSONDecoder().decode(Response.self, from: data)
-                    guard let lat = value.latitude, let lon = value.longitude else { throw WeatherFailure.message("Approximate location unavailable — enter a city in Weather Settings") }
-                    latitude = lat; longitude = lon; resolvedCity = (value.city ?? "Approximate location") + " (IP)"
+                    throw WeatherFailure.message("Location unavailable — enter a city in Weather Settings")
                 }
                 try Task.checkCancellation()
                 guard self.enabled, self.generation == token else { return }

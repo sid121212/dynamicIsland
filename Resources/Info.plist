@@ -54,7 +54,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/sid121212/dynamicIsland/releases/latest/download/appcast.xml</string>
+	<string>$(SITE_URL)/downloads/notch/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>R5tnNRqzvurYtEoBF+JYYYkGNPW4zPhD8i5c09+rnws=</string>
 	<key>SUScheduledCheckInterval</key>

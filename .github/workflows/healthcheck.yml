@@ -13,5 +13,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Follow redirects and check both public assets
         env:
+          SITE_URL: ${{ vars.SITE_URL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/healthcheck.sh

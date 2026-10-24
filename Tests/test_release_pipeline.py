@@ -8,7 +8,7 @@ class ReleaseChecks(unittest.TestCase):
  def prepare(self, **env):
   with tempfile.TemporaryDirectory() as temp:
    path=pathlib.Path(temp)/'Info.plist'
-   proc=subprocess.run(['python3',str(ROOT/'scripts/prepare-info.py'),str(path)],env={**os.environ,**env},capture_output=True,text=True)
+   proc=subprocess.run(['python3',str(ROOT/'scripts/prepare-info.py'),str(path)],env={**os.environ,'SITE_URL':'https://downloads.test.invalid','CONTACT_EMAIL':'support@test.invalid',**env},capture_output=True,text=True)
    return proc,plistlib.loads(path.read_bytes()) if path.exists() else None
  def test_valid_stable_and_beta_metadata(self):
   for version in ('1.2.3','1.2.3-beta','1.2.3-beta.2'):
@@ -63,7 +63,7 @@ if [[ "$1" == rev-parse ]]; then printf 'fixture-head\\n'; fi
 ''')
     for name in ('codesign','hdiutil','ditto','cmake'):executable(mock/name,'#!/bin/sh\nexit 0\n')
     executable(fixture/'create-dmg','#!/bin/sh\nexit 0\n')
-    env={**os.environ,'PATH':str(mock)+':'+os.environ['PATH'],'MOCK_LOG':str(fixture/'calls'),'CREATE_DMG':str(fixture/'create-dmg'),'RELEASE_REPOSITORY':'example/notch','SIGNING_IDENTITY':'mock-only'}
+    env={**os.environ,'PATH':str(mock)+':'+os.environ['PATH'],'MOCK_LOG':str(fixture/'calls'),'CREATE_DMG':str(fixture/'create-dmg'),'RELEASE_REPOSITORY':'example/notch','SIGNING_IDENTITY':'mock-only','SITE_URL':'https://downloads.test.invalid','CONTACT_EMAIL':'support@test.invalid'}
     result=subprocess.run([str(fixture/'scripts/release.sh'),version,'12'],env=env,capture_output=True,text=True)
     self.assertEqual(result.returncode,0,result.stderr)
     calls=[json.loads(line) for line in (fixture/'calls').read_text().splitlines()]
@@ -79,4 +79,28 @@ if [[ "$1" == rev-parse ]]; then printf 'fixture-head\\n'; fi
     self.assertIn('greater than every published build',blocked.stderr)
     rejected=[json.loads(line) for line in (fixture/'calls').read_text().splitlines()]
     self.assertFalse(any(c[:2]==['release','create'] for c in rejected))
+ def test_size_limit_boundary(self):
+  with tempfile.TemporaryDirectory() as temp:
+   path=pathlib.Path(temp)/'fixture.zip'
+   with path.open('wb') as f:f.truncate(25*1024*1024-1)
+   good=subprocess.run(['python3',str(ROOT/'scripts/check-artifact-sizes.py'),str(path)],capture_output=True,text=True)
+   self.assertEqual(good.returncode,0,good.stderr)
+   with path.open('wb') as f:f.truncate(25*1024*1024)
+   bad=subprocess.run(['python3',str(ROOT/'scripts/check-artifact-sizes.py'),str(path)],capture_output=True,text=True)
+   self.assertNotEqual(bad.returncode,0);self.assertIn('25 MiB',bad.stderr)
+ def test_site_origin_is_required_and_no_forbidden_host(self):
+  for origin in ('','https://example.com','https://www.example.com','https://placeholder.invalid','https://github.com','http://site.invalid','https://site.invalid/path'):
+   proc,info=self.prepare(SITE_URL=origin)
+   self.assertNotEqual(proc.returncode,0);self.assertIsNone(info)
+  proc,info=self.prepare()
+  self.assertEqual(info['SUFeedURL'],'https://downloads.test.invalid/downloads/notch/appcast.xml')
+ def test_built_app_guard_rejects_resource_host(self):
+  import shutil
+  with tempfile.TemporaryDirectory() as temp:
+   app=pathlib.Path(temp)/'Guard.app';(app/'Contents/MacOS').mkdir(parents=True);(app/'Contents/Resources').mkdir()
+   (app/'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable':'fixture'}))
+   shutil.copy('/usr/bin/true',app/'Contents/MacOS/fixture')
+   (app/'Contents/Resources/forbidden.txt').write_text('https://github.com/forbidden')
+   result=subprocess.run([str(ROOT/'scripts/check-no-github.sh'),str(app)],capture_output=True,text=True)
+   self.assertNotEqual(result.returncode,0);self.assertIn('Forbidden host',result.stderr)
 if __name__=='__main__':unittest.main(verbosity=2)

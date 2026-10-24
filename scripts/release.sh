@@ -53,8 +53,7 @@ PY
 PRE=(--prerelease=false); [[ "$RELEASE_VERSION" != *-* ]] || PRE=(--prerelease)
 gh release create "v$RELEASE_VERSION" --repo "$REPO" --verify-tag --draft "${PRE[@]}" \
   --title "Dynamic Island $RELEASE_VERSION" --notes-file "$WORK_DIR/release-body.md" \
-  "$DMG" "$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.zip" "$ARTIFACT_DIR/appcast.xml" \
-  "$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.dmg.sha256" "$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.html"
+  "$ARTIFACT_DIR/"*
 if [[ "$RELEASE_VERSION" == *-* ]]; then
   gh release edit "v$RELEASE_VERSION" --repo "$REPO" --draft=false --prerelease --latest=false
 else
@@ -63,5 +62,5 @@ fi
 python3 - "$DMG" "$RELEASE_VERSION" <<'PY'
 import hashlib,pathlib,sys
 p=pathlib.Path(sys.argv[1]);print(f'Website: version={sys.argv[2]} size={p.stat().st_size} bytes sha256={hashlib.sha256(p.read_bytes()).hexdigest()}')
-print('Public feed: https://github.com/'+__import__('os').environ['RELEASE_REPOSITORY']+'/releases/latest/download/appcast.xml')
+print('Public feed: '+__import__('os').environ['SITE_URL'].rstrip('/')+'/downloads/notch/appcast.xml')
 PY

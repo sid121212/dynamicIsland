@@ -1,7 +1,7 @@
 Dynamic Island · Apple Silicon · macOS 15+
 Every public app is free to download and use. No account or license check.
 
-1. Compare the DMG's SHA-256 with the .sha256 asset on the GitHub release page.
+1. Compare the DMG's SHA-256 with the .sha256 asset on the website download page.
 2. Drag Dynamic Island.app to Applications, then eject this disk image.
 3. Open the app from Applications. It lives in the menu bar; there is no Dock icon.
 

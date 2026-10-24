@@ -28,12 +28,9 @@ jobs:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
           RELEASE_REPOSITORY: ${{ github.repository }}
+          SITE_URL: ${{ vars.SITE_URL }}
+          CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
         run: scripts/ci-release.sh
-      - name: Rebuild website for stable releases
-        if: ${{ !contains(github.ref_name, '-') }}
-        env:
-          SITE_DEPLOY_HOOK_URL: ${{ secrets.SITE_DEPLOY_HOOK_URL }}
-        run: scripts/site-rebuild.sh
       - name: Preserve built public artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -50,3 +47,9 @@ jobs:
             security delete-keychain "$dir/release.keychain-db" >/dev/null 2>&1 || true
             rm -rf "$dir"
           done
+      - name: Dispatch site rebuild after all release assets are published
+        if: success()
+        env:
+          SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: scripts/site-rebuild.sh

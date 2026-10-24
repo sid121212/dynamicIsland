@@ -188,6 +188,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         diagnostics.target = self
         let permissionsItem = menu.addItem(withTitle: "Permissions…", action: #selector(showPermissions), keyEquivalent: "")
         permissionsItem.target = self
+        let report = menu.addItem(withTitle: "Report a Problem…", action: #selector(reportProblem), keyEquivalent: "")
+        report.target = self
         updates.addMenuItems(to: menu)
         let about = menu.addItem(withTitle: "About Dynamic Island…", action: #selector(showAbout), keyEquivalent: "")
         about.target = self
@@ -234,9 +236,24 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.popUp(positioning: nil, at: point, in: islandView)
     }
 
+    @objc private func reportProblem() {
+        guard let email = Bundle.main.object(forInfoDictionaryKey: "ZDLContactEmail") as? String, !email.isEmpty else { return }
+        DiagnosticsModel.shared.refreshSignature()
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Dynamic Island"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        let summary = ServiceID.allCases.compactMap { id -> String? in
+            guard let entry = DiagnosticsModel.shared.entries[id] else { return nil }
+            return "\(id.title): \(entry.severity.rawValue) — \(entry.summary)"
+        }.joined(separator: "\n")
+        var components = URLComponents()
+        components.scheme = "mailto"; components.path = email
+        components.queryItems = [URLQueryItem(name: "subject", value: "Problem report: \(appName) \(version)"), URLQueryItem(name: "body", value: "Describe the problem here:\n\nApp: \(version) (\(build))\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\n\nDiagnostics:\n\(summary)\n\nPlease review this draft before sending. No report has been sent automatically.")]
+        if let url = components.url { NSWorkspace.shared.open(url) }
+    }
     @objc private func showDiagnostics() { diagnosticsWindow.present() }
     @objc private func showAbout() {
-        let credits = NSAttributedString(string: "System-wide Now Playing uses MediaRemote Adapter.\nCopyright © 2025 Jonas van den Berg and contributors.\nBSD 3-Clause License · github.com/ungive/mediaremote-adapter\nFull license: app Contents/Resources/MediaRemoteAdapter-LICENSE.txt\nWeather data: Open-Meteo.com (CC BY 4.0). Approximate IP location: ipapi.co.\nUpdates: Sparkle (MIT and included third-party licenses).\nFull license: app Contents/Resources/Sparkle-LICENSE.txt")
+        let credits = NSAttributedString(string: "System-wide Now Playing uses MediaRemote Adapter.\nCopyright © 2025 Jonas van den Berg and contributors.\nBSD 3-Clause License\nFull license: app Contents/Resources/MediaRemoteAdapter-LICENSE.txt\nWeather data: Open-Meteo.com (CC BY 4.0).\nUpdates: Sparkle (MIT and included third-party licenses).\nFull license: app Contents/Resources/Sparkle-LICENSE.txt")
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -2,15 +2,13 @@
 
 This pipeline uses **no Apple Developer Program, notarization, Homebrew, license server or sponsor check**. Every public app remains free. Sparkle verifies update archives using EdDSA; this does not make the first downloaded app trusted by Gatekeeper. Recipients may need Open Anyway. Never ask them to disable Gatekeeper, strip quarantine globally, or trust our certificate as a root.
 
-## Current public configuration
+## Public URLs and private storage
 
-- Repository: `sid121212/dynamicIsland` (override with `RELEASE_REPOSITORY` for a staging repository).
-- Application: `Dynamic Island.app`, arm64, macOS 15+.
-- Signing identity: `NotchDev` (or its certificate fingerprint). Public name lives in `release.config.json`; the private key stays in Keychain.
-- Sparkle public key: `R5tnNRqzvurYtEoBF+JYYYkGNPW4zPhD8i5c09+rnws=`. Public keys are safe to commit; private keys are not.
-- Feed: `https://github.com/sid121212/dynamicIsland/releases/latest/download/appcast.xml`.
-- Sparkle 2.10.0 is pinned by `Package.swift` and `Package.resolved`; SwiftPM verifies its binary artifact checksum. `build.sh` copies the macOS framework out of the XCFramework and links `@executable_path/../Frameworks`.
-- Release candidate: 0.5.1, build 11. The existing 0.5.0/build 10 test app does not contain Sparkle; it requires a manual install to receive this updater.
+Both repositories remain private. Users download only from `${SITE_URL}/download/notch/`; Sparkle uses `${SITE_URL}/downloads/notch/appcast.xml` and same-origin ZIP enclosures. Set the **final HTTPS origin** in repository variable `SITE_URL` and `CONTACT_EMAIL` for mail drafts. Placeholder or missing origins and missing contact addresses fail builds. Keep the origin stable for already-installed apps. The source Info.plist contains an injection marker; only build.sh's stamped copy is distributable.
+
+`release.config.json` defines slug `notch`, storage repository `sid121212/dynamicIsland`, signing identity `NotchDev`, arm64/macOS 15+, and the public EdDSA key. The committed public EdDSA key is `R5tnNRqzvurYtEoBF+JYYYkGNPW4zPhD8i5c09+rnws=`. No source repository URL is embedded in the app. Sparkle 2.10.0 remains pinned.
+
+The old 0.5.1/build 11 artifacts in `dist/0.5.1` embed the old feed. Do not mirror or republish them as a self-hosted update. Choose a new semver and increasing build, add reviewed release notes, and rebuild with the real site origin. The local QA app may use `release-test.invalid`; it must never be shipped.
 
 ## Tools, without Homebrew
 
@@ -42,51 +40,22 @@ The default command creates the pair only when none exists, stores the private k
 
 The provided public key alone cannot sign an update. A lost EdDSA key without a Developer ID recovery path can require a manual reinstall; preserve the private key and certificate across machines and releases. Do not rotate the signing certificate or public key without testing a migration.
 
-## GitHub Actions setup
 
-In the app repository, add these Actions secrets yourself through GitHub's secret UI:
+## Private release and public mirror pipeline
 
-| Secret | Value |
-| --- | --- |
-| `SIGNING_P12_BASE64` | Base64 encoding of the single exported NotchDev identity `.p12` |
-| `SIGNING_P12_PASSWORD` | Its export password |
-| `SPARKLE_ED_PRIVATE_KEY` | Exact contents of the file exported by `generate_keys -x` |
-| `SITE_DEPLOY_HOOK_URL` | Optional Cloudflare Pages deployment hook for the website |
+App repository Actions secrets: `SIGNING_P12_BASE64`, `SIGNING_P12_PASSWORD`, `SPARKLE_ED_PRIVATE_KEY`, and `SITE_DISPATCH_TOKEN` (fine-grained contents-write access to the private site repo). Variables: `SITE_URL`, `CONTACT_EMAIL`, optional `SITE_REPOSITORY` (defaults to `sid121212/zero-dollar-labs`), optional `SPARKLE_PUBLIC_ED_KEY`. The certificate is imported in a temporary keychain, trusted only for code signing on that runner, and removed on exit. No Homebrew or Apple Developer Program is used.
 
-The public key is committed in release.config.json and Info.plist. An optional **Actions variable** `SPARKLE_PUBLIC_ED_KEY` can override it; this is not a secret. The built-in GITHUB_TOKEN supplies release publishing and issue permissions, scoped by each workflow. Never use a private key as a NEXT_PUBLIC variable or upload it as an artifact.
+Site repo and hosting build secret: `RELEASES_READ_TOKEN`, read-only contents/releases access to all private app repos. Site repo secret: `SITE_DEPLOY_HOOK_URL`, the Cloudflare Pages build hook. The site repository and hosting build read the origin only from `NEXT_PUBLIC_SITE_URL`; app repositories read it only from `SITE_URL`. The website contact address is stored once as `CONTACT_EMAIL` in site.config.ts; app repositories store the matching address in the `CONTACT_EMAIL` variable. Never expose release tokens using a public environment-variable prefix.
 
-`release.yml` runs on `v*` tags on a disposable macOS runner, selects recent Xcode and uses the preinstalled CMake/GitHub CLI. `ci-release.sh` creates a random-password temporary keychain, imports only that identity, grants the signing tools access, temporarily trusts the self-signed certificate for **codeSign only**, and restores/deletes everything on exit. An `always()` step retries cleanup after cancellation. It refuses to run outside GitHub macOS Actions. Nothing modifies a recipient's trust store. Public repositories can use GitHub's standard hosted runners under its applicable free-use rules; private repositories, larger runners and hosting/bandwidth can have separate costs.
+1. Set a new `CFBundleShortVersionString` and strictly increasing integer `CFBundleVersion` in Resources/Info.plist, write `docs/release-notes/<version>.html`, commit, and tag that exact clean commit `v<version>`.
+2. Push the tag to run release.yml, or check out the clean tagged commit and run `SITE_URL=https://your-real-host CONTACT_EMAIL=your-address scripts/release.sh <version> <build>`. Release.sh publishes; use package-artifacts.sh only for packaging an already-built app.
+3. The release creates the DMG with a drag-to-Applications layout and a ZIP using ditto. Both must be **strictly smaller than 25 MiB**. Sizes print before appcast generation; oversized files stop publication.
+4. Sparkle generates the appcast from an isolated folder containing one ZIP plus its HTML notes. Enclosures must match the site prefix and expected version/build/length. An independent CryptoKit verification checks the ZIP's EdDSA signature against the app's public key.
+5. Assets include DMG, ZIP, appcast.xml, release-notes.md, HTML notes and a `.sha256` sidecar for every non-sidecar file. Extra sidecars let the site verify the ZIP, appcast and notes as well as the DMG. A draft release is published only after uploads succeed. Beta tags are pre-releases and never become latest stable.
+6. The final release.yml step dispatches `app-released` with slug/version to the site repo. Dispatch failure fails the job; the release remains published. Retry only the failed dispatch step, not immutable artifact publication.
+7. Site CI/hosting runs fetch-releases.ts, verifies all required assets, retains three non-draft releases, mirrors only the stable feed, prunes other files, generates releases.json and 302 redirects, exports and scans the site. No users receive upstream URLs. Daily site rebuilds perform the same mirror operation. A stable release must remain within the three retained releases.
+8. Site CI calls the deploy hook after passing guards; Cloudflare builds from the same commit with the private read token. Confirm production deployment completion and run the public download/update checks.
 
-Enable Issues and scheduled Actions in the app repository. `healthcheck.yml` follows redirects with `curl -I -L`, checks the latest stable versioned DMG and appcast for final HTTP 200, and creates or comments on **Download or appcast is broken** on failure. Before the first stable release, a failing healthcheck is expected. GitHub may disable scheduled workflows in inactive public repositories; verify scheduled runs in the Actions UI.
+The daily healthcheck follows only the site's `/download/notch/` and `/downloads/notch/appcast.xml` URLs. GitHub is used solely to create/comment on the private maintenance issue when they fail.
 
-`site-rebuild.yml` handles `release: published` and manual dispatch, skipping betas. Releases created with the built-in GITHUB_TOKEN do not trigger another workflow, so `release.yml` also calls the deploy hook directly after a stable publish. This avoids silently missing website rebuilds. Configure the website host to run its build and use the correct production origin; a hook only requests a rebuild and does not prove deployment succeeded.
-
-## Local build and release
-
-The build flag `NOTARIZED=0` is the default and includes first-launch help. `NOTARIZED=1` compiles that help out; it does not notarize anything. Keep it at 0 for this pipeline. Both variants can be type-checked with `scripts/typecheck.sh` and `NOTARIZED=1 scripts/typecheck.sh`.
-
-1. Edit `Resources/Info.plist`: choose the next semver and a positive integer build larger than **every** earlier release, including betas. Write reviewed `docs/release-notes/<version>.html`. Keep release notes as small HTML fragments, with no remote scripts/resources.
-2. Build locally: `SIGNING_IDENTITY=NotchDev ./build.sh`. Run `./check.sh` and the clean-Mac tests in TESTING.md. To package without publishing: `scripts/package-artifacts.sh <version> <build>`. This generates signed-update artifacts using your existing Sparkle key; it does not contact GitHub. Inspect the DMG drag-to-Applications layout.
-3. Commit the reviewed source and Package.resolved. Tag that exact commit and push the tag: `git tag -a v<version> -m 'Release <version>'`, then `git push origin v<version>`. This starts the publishing workflow. Do not push a tag until you intend to release.
-4. Alternatively, from a clean checkout at an existing pushed release tag, run `SIGNING_IDENTITY=NotchDev scripts/release.sh <version> <build>`. **This command publishes a GitHub release.** `./package.sh <version> <build>` is an explicit publishing wrapper. Never run it just to test packaging.
-
-The script validates semver/integer build, refuses an existing release, requires a clean checkout at the tag, checks monotonically increasing build markers from prior GitHub releases, builds/signs, verifies the signature and prints the identity. Legacy unmarked releases must be audited manually before the first use; build 11 is greater than our prior local build 10. It never edits or replaces old release assets.
-
-Artifacts under `dist/<version>/`:
-
-- `DynamicIsland-<version>.dmg` and its `.dmg.sha256` sidecar, for people.
-- `DynamicIsland-<version>.zip`, created by `ditto -c -k --sequesterRsrc --keepParent`, for Sparkle.
-- `appcast.xml` and `DynamicIsland-<version>.html` release notes.
-
-`generate_appcast` signs the ZIP, embeds the reviewed HTML notes and records a versioned GitHub download URL. It reads the local Keychain by default; in CI `--ed-key-file -` receives the exported secret through stdin. Validation rejects missing signatures, key mismatch, wrong version/build/URL, empty archives or missing notes before any upload. A separate CryptoKit verifier checks the actual ZIP signature against the public key in the shipped app and compares the recorded byte length. The DMG is kept out of the appcast input folder, so Sparkle selects the ZIP only. Deltas are disabled initially; a fresh full-update feed is enough for all older supported builds.
-
-A draft release receives all assets first, then is published. Any semver pre-release suffix (including `-beta` and `-beta.1`) is marked pre-release and `latest=false`, so GitHub's `/releases/latest/` stays on stable. Stable releases are explicitly marked latest. A failed upload leaves a draft for inspection; do not delete/retry automatically without checking what exists. If local packaging fails, inspect/remove only its generated `dist/<version>/` folder before retrying.
-
-The script prints the website's version, size in bytes and SHA-256. The website in `../zero-dollar-labs` selects the versioned DMG by prefix and rebuilds its metadata. Keep its Notch status at testing until clean-Mac release acceptance passes, then set released. No Homebrew cask is configured. Release links and SHA-256 must remain beside the first-launch help.
-
-## References
-
-- [Sparkle setup and keys](https://sparkle-project.org/documentation/)
-- [Sparkle publishing and archive formats](https://sparkle-project.org/documentation/publishing/)
-- [Sparkle nested helper signing](https://sparkle-project.org/documentation/sandboxing/)
-- [GitHub events triggered by GITHUB_TOKEN](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow)
+No public feed exists until hosting is configured and deployed. Do not invent a hostname or publish a QA build. Never overwrite a published versioned artifact. Run the clean-Mac test in TESTING.md before claiming auto-updates work end to end.

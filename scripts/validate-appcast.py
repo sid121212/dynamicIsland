@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-import base64, pathlib, sys, xml.etree.ElementTree as ET
+import base64, pathlib, re, sys, xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 SPARKLE='http://www.andymatuschak.org/xml-namespaces/sparkle'
 def validate(path,version,build,url):
+    text=pathlib.Path(path).read_text()
+    if re.search(r'github\.com|githubusercontent\.com|github\.io|ghcr\.io|gist\.github|git\.io',text,re.I):raise ValueError('Forbidden host in appcast')
+    for found in re.findall(r'https?://[^\s<>"\']+',text):
+        if found==SPARKLE:continue
+        if urlparse(found).netloc!=urlparse(url).netloc:raise ValueError('Appcast URLs must stay on the site origin')
     root=ET.parse(path).getroot()
     items=root.findall('./channel/item')
     if len(items)!=1: raise ValueError('Expected one new full update')

@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 [[ $# == 2 ]] || { echo 'Usage: package-artifacts.sh <version> <build>' >&2; exit 1; }
 export RELEASE_VERSION="$1" RELEASE_BUILD="$2"
+: "${SITE_URL:?Set SITE_URL to the public HTTPS origin}"
+python3 scripts/prepare-info.py
+SLUG="$(python3 -c 'import json;print(json.load(open("release.config.json"))["slug"])')"
 REPO="${RELEASE_REPOSITORY:-$(python3 -c 'import json;print(json.load(open("release.config.json"))["repository"])')}"
 APP_DIR="$ROOT_DIR/build/Dynamic Island.app"
 CREATE_DMG="${CREATE_DMG:-$ROOT_DIR/build/tools/create-dmg/create-dmg}"
@@ -13,12 +16,15 @@ mkdir -p "$ROOT_DIR/build"
 WORK_DIR="$(mktemp -d "$ROOT_DIR/build/package.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 codesign --verify --deep --strict "$APP_DIR"
+"$ROOT_DIR/scripts/check-no-github.sh" "$APP_DIR"
+EXPECTED_FEED="${SITE_URL%/}/downloads/$SLUG/appcast.xml"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$APP_DIR/Contents/Info.plist")" == "$EXPECTED_FEED" ]] || { echo 'Built app feed does not match SITE_URL; rebuild the app' >&2; exit 1; }
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/Contents/Info.plist")" == "$RELEASE_VERSION" ]] || { echo 'App version does not match requested package version' >&2; exit 1; }
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_DIR/Contents/Info.plist")" == "$RELEASE_BUILD" ]] || { echo 'App build does not match requested package build' >&2; exit 1; }
 [[ -f "$NOTES" ]] || { echo 'Write reviewed HTML release notes first' >&2; exit 1; }
 SPARKLE_ROOT="$ROOT_DIR/.build/artifacts/sparkle/Sparkle"
 STEM="$(python3 -c 'import json;print(json.load(open("release.config.json"))["assetStem"])')"
-ARTIFACT_DIR="$ROOT_DIR/dist/$RELEASE_VERSION"
+ARTIFACT_DIR="${ARTIFACT_ROOT:-$ROOT_DIR/dist}/$RELEASE_VERSION"
 [[ ! -e "$ARTIFACT_DIR" ]] || { echo 'Local release folder already exists. Inspect it before retrying; nothing was overwritten.' >&2; exit 1; }
 mkdir -p "$ARTIFACT_DIR" "$WORK_DIR/dmg" "$WORK_DIR/feed"
 ditto "$APP_DIR" "$WORK_DIR/dmg/Dynamic Island.app"
@@ -30,8 +36,9 @@ DMG="$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.dmg"
 hdiutil verify "$DMG"
 ZIP="$WORK_DIR/feed/$STEM-$RELEASE_VERSION.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP"
+python3 scripts/check-artifact-sizes.py "$DMG" "$ZIP"
 cp "$NOTES" "$WORK_DIR/feed/$STEM-$RELEASE_VERSION.html"
-PREFIX="https://github.com/$REPO/releases/download/v$RELEASE_VERSION/"
+PREFIX="${SITE_URL%/}/downloads/$SLUG/"
 ARGS=(--download-url-prefix "$PREFIX" --embed-release-notes --maximum-deltas 0 -o "$WORK_DIR/feed/appcast.xml")
 # CI passes the exported Sparkle secret via stdin; it is never placed in arguments or a source file.
 if [[ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ]]; then
@@ -54,4 +61,12 @@ PYVERIFY
 cp "$ZIP" "$WORK_DIR/feed/appcast.xml" "$ARTIFACT_DIR/"
 cp "$NOTES" "$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.html"
 (cd "$ARTIFACT_DIR" && shasum -a 256 "$STEM-$RELEASE_VERSION.dmg" > "$STEM-$RELEASE_VERSION.dmg.sha256")
+python3 scripts/release-notes.py "$NOTES" "$ARTIFACT_DIR/release-notes.md"
+python3 - "$ARTIFACT_DIR" <<'PYSUM'
+import hashlib,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+for file in root.iterdir():
+ if file.is_file() and not file.name.endswith('.sha256'):
+  file.with_name(file.name+'.sha256').write_text(hashlib.sha256(file.read_bytes()).hexdigest()+'  '+file.name+'\n')
+PYSUM
 printf 'Packaged (not published): %s\n' "$ARTIFACT_DIR"

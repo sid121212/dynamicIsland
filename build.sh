@@ -34,7 +34,13 @@ ditto "$BUILD_DIR/mediaremote-adapter/MediaRemoteAdapter.framework" "$APP_DIR/Co
 cp "$BUILD_DIR/mediaremote-adapter/MediaRemoteAdapterTestClient" "$APP_DIR/Contents/MacOS/"
 cp "$ROOT_DIR/Vendor/mediaremote-adapter/bin/mediaremote-adapter.pl" "$APP_DIR/Contents/Resources/"
 cp "$ROOT_DIR/Vendor/mediaremote-adapter/LICENSE" "$APP_DIR/Contents/Resources/MediaRemoteAdapter-LICENSE.txt"
-cp "$ROOT_DIR/.build/checkouts/Sparkle/LICENSE" "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt"
+rm -f "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt"
+python3 - "$ROOT_DIR/.build/checkouts/Sparkle/LICENSE" "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt" <<'PYLICENSE'
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+text=text.replace('Portable C implementation of Ed25519, from https://github.com/orlp/ed25519','Portable C implementation of Ed25519 (orlp/ed25519)')
+pathlib.Path(sys.argv[2]).write_text(text)
+PYLICENSE
 
 xcrun swiftc \
   -default-isolation MainActor \
@@ -85,4 +91,5 @@ xcrun swiftc \
   -o "$APP_DIR/Contents/MacOS/DynamicIslandNotify"
 
 "$ROOT_DIR/scripts/sign-app.sh" "$APP_DIR"
+"$ROOT_DIR/scripts/check-no-github.sh" "$APP_DIR"
 echo "$APP_DIR"

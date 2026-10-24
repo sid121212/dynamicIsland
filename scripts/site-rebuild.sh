@@ -1,9 +1,12 @@
 #!/bin/bash
 set -euo pipefail
-if [[ -z "${SITE_DEPLOY_HOOK_URL:-}" ]]; then
-  echo 'No website deploy hook configured; skipping.'; exit 0
-fi
-# Suppress secret hook URLs in output, including curl errors.
-if ! curl --fail --silent --request POST "$SITE_DEPLOY_HOOK_URL" --output /dev/null; then
-  echo 'Website deploy hook failed. Rebuild manually; the app release remains published.' >&2; exit 1
-fi
+: "${SITE_DISPATCH_TOKEN:?Set SITE_DISPATCH_TOKEN with access to the private site repository}"
+SITE_REPOSITORY="${SITE_REPOSITORY:-sid121212/zero-dollar-labs}"
+[[ "$SITE_REPOSITORY" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || exit 1
+SLUG="$(python3 -c 'import json;print(json.load(open("release.config.json"))["slug"])')"
+VERSION="${GITHUB_REF_NAME#v}"
+export GH_TOKEN="$SITE_DISPATCH_TOKEN"
+python3 - "$SLUG" "$VERSION" <<'PYDISPATCH' | gh api --method POST "repos/$SITE_REPOSITORY/dispatches" --input -
+import json,sys
+print(json.dumps({'event_type':'app-released','client_payload':{'slug':sys.argv[1],'version':sys.argv[2]}}))
+PYDISPATCH
