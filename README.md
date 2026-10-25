@@ -26,10 +26,12 @@ Self-signed releases use the existing `NotchDev` identity and Sparkle 2. No paid
 ```sh
 SIGNING_IDENTITY=NotchDev ./build.sh
 scripts/bootstrap-release-tools.sh
-scripts/package-artifacts.sh 0.5.1 11
+cp .release.env.example .release.env
+# Review configuration and commit source changes first.
+scripts/release.sh 1.0.0 12 --no-publish
 ```
 
-This creates a verified release disk image at `dist/0.5.1/DynamicIsland-0.5.1.dmg`, containing the app and an Applications shortcut. Quit the running development app, open the DMG, drag the app into Applications, and open it from Applications. Eject the DMG after copying. The app has no Dock icon; use its capsule menu-bar icon.
+This creates a verified release disk image at `dist/Notch-1.0.0.dmg`, containing the app and an Applications shortcut. Quit the running development app, open the DMG, drag the app into Applications, and open it from Applications. Eject the DMG after copying. The app has no Dock icon; use its capsule menu-bar icon.
 
 The build is self-signed with NotchDev, not Apple-notarized. If macOS blocks the first launch, approve the locally built app through Finder's Open command or System Settings → Privacy & Security. Enable Launch at Login after installing the app in Applications.
 
@@ -39,7 +41,7 @@ The DMG is a self-contained app bundle for Apple Silicon Macs (M1 or later) runn
 
 This build does not run on Intel Macs or Windows PCs. Intel support requires rebuilding the app and every bundled native helper/framework for x86_64 (or a universal build), then testing on Intel hardware. Windows requires a separate implementation.
 
-The updater-enabled release candidate is 0.5.1 (build 11). It is self-signed, not notarized, and must pass the clean-Mac tests before a stable public release. Gatekeeper approval remains a first-install step; Sparkle's EdDSA verification protects subsequent update archives. Packaging and creating source files do not publish a release. Only the tagged release workflow or explicit publishing command does that. Complete `docs/TESTING.md` before publishing.
+The updater-enabled release candidate is 0.5.1 (build 11). It is self-signed, not notarized, and must pass the clean-Mac tests before a stable public release. Gatekeeper approval remains a first-install step; Sparkle's EdDSA verification protects subsequent update archives. Packaging and creating source files do not publish a release. Only the explicit publishing command does that; the release workflow only notifies the website. Complete `docs/TESTING.md` before publishing.
 
 ## Interface
 

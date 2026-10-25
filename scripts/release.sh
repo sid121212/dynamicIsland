@@ -1,66 +1,82 @@
 #!/bin/bash
 set -euo pipefail
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT_DIR"
-[[ $# == 2 ]] || { echo 'Usage: scripts/release.sh <semver> <integer-build>' >&2; exit 1; }
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+[[ $# -ge 2 && $# -le 3 ]] || { echo 'Usage: scripts/release.sh <version> <build> [--no-publish | --publish-only]' >&2; exit 1; }
 export RELEASE_VERSION="$1" RELEASE_BUILD="$2" NOTARIZED=0
-REPO="${RELEASE_REPOSITORY:-$(python3 -c 'import json;print(json.load(open("release.config.json"))["repository"])')}"
-export RELEASE_REPOSITORY="$REPO"
-SIGNING_IDENTITY="${SIGNING_IDENTITY:-$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["signingIdentity"])' "$ROOT_DIR/release.config.json")}"
-export SIGNING_IDENTITY
-: "${SIGNING_IDENTITY:?Set SIGNING_IDENTITY; see docs/RELEASING.md}"
-python3 scripts/prepare-info.py
-for tool in gh ditto hdiutil shasum python3 cmake; do command -v "$tool" >/dev/null || { echo "Missing release tool: $tool (see docs/RELEASING.md; no Homebrew needed)" >&2; exit 1; }; done
-CREATE_DMG="${CREATE_DMG:-$ROOT_DIR/build/tools/create-dmg/create-dmg}"
-[[ -x "$CREATE_DMG" ]] || { echo 'Missing create-dmg. Run scripts/bootstrap-release-tools.sh first.' >&2; exit 1; }
-gh auth status >/dev/null
-[[ "$(git rev-parse HEAD)" == "$(git rev-parse "v$RELEASE_VERSION^{commit}")" ]] || { echo 'Check out the exact release tag before publishing' >&2; exit 1; }
-[[ -z "$(git status --porcelain)" ]] || { echo 'Commit or remove untracked source changes before releasing' >&2; exit 1; }
-# GitHub tag/release names are immutable here. Never overwrite a published feed or artifact.
-if gh release view "v$RELEASE_VERSION" --repo "$REPO" >/dev/null 2>&1; then echo 'Release already exists; choose a new version/build' >&2; exit 1; fi
-mkdir -p "$ROOT_DIR/build"
-WORK_DIR="$(mktemp -d "$ROOT_DIR/build/release.XXXXXX")"
-trap 'rm -rf "$WORK_DIR"' EXIT
-# Include beta releases in the monotonic counter. Treat API failure as an error, not an empty history.
-gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[].body // ""' > "$WORK_DIR/history.txt"
-python3 - "$RELEASE_BUILD" "$WORK_DIR/history.txt" <<'PY'
-import pathlib,plistlib,re,sys
-current=int(sys.argv[1]);text=pathlib.Path(sys.argv[2]).read_text()
-prior=[int(x) for x in re.findall(r'<!-- zerodollarlabs-build:(\d+) -->',text)]
-baseline=int(plistlib.loads(pathlib.Path('Resources/Info.plist').read_bytes())['CFBundleVersion'])
-if current<baseline or (prior and current<=max(prior)):sys.exit('Build must be at least the committed build and greater than every published build, including betas')
+MODE="${3:-}"
+[[ -z "$MODE" || "$MODE" == --no-publish || "$MODE" == --publish-only ]] || { echo 'Unknown release option' >&2; exit 1; }
+source release/config.sh
+if [[ -f .release.env ]]; then set -a; source .release.env; set +a; fi
+export SIGNING_IDENTITY="${SIGN_IDENTITY:-NotchDev}"
+fail() { echo "Preflight failed: $*" >&2; exit 1; }
+[[ "$(git branch --show-current)" == main ]] || fail 'Check out main before releasing.'
+[[ -z "$(git status --porcelain)" ]] || fail 'Git state must be clean on main. Review and commit your changes yourself; this script never commits.'
+[[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Version must be X.Y.Z semver (no prerelease).'
+[[ "$RELEASE_BUILD" =~ ^[1-9][0-9]*$ ]] || fail 'Build must be a positive integer.'
+python3 - <<'PY'
+import os,sys,urllib.parse
+raw=os.environ.get('SITE_URL','');u=urllib.parse.urlsplit(raw)
+if u.scheme!='https' or not u.hostname or u.path or u.query or u.fragment or u.username or u.password or raw.endswith('/') or 'placeholder' in raw or 'example.com' in raw: sys.exit('Preflight failed: Set SITE_URL in .release.env to your HTTPS origin, without a trailing slash.')
 PY
-NOTES="$ROOT_DIR/docs/release-notes/$RELEASE_VERSION.html"
-[[ -f "$NOTES" ]] || { echo "Write release notes first: $NOTES" >&2; exit 1; }
-"$ROOT_DIR/build.sh"
-APP_DIR="$ROOT_DIR/build/Dynamic Island.app"
-codesign --verify --deep --strict "$APP_DIR"
-codesign --display --verbose=4 "$APP_DIR" 2>&1
-"$ROOT_DIR/scripts/package-artifacts.sh" "$RELEASE_VERSION" "$RELEASE_BUILD"
-STEM="$(python3 -c 'import json;print(json.load(open("release.config.json"))["assetStem"])')"
-ARTIFACT_DIR="$ROOT_DIR/dist/$RELEASE_VERSION"
-DMG="$ARTIFACT_DIR/$STEM-$RELEASE_VERSION.dmg"
-python3 - "$NOTES" "$WORK_DIR/release-body.md" "$RELEASE_BUILD" <<'PY'
-import pathlib,sys
-from html.parser import HTMLParser
-class Text(HTMLParser):
- def __init__(self): super().__init__();self.parts=[]
- def handle_data(self,d): self.parts.append(d.strip())
-p=Text();p.feed(pathlib.Path(sys.argv[1]).read_text())
-pathlib.Path(sys.argv[2]).write_text('\n\n'.join(x for x in p.parts if x)+'\n\nSelf-signed, not notarized. Apple Silicon, macOS 15+. Download the DMG, compare the SHA-256, then drag the app into Applications. First-launch approval instructions are in Install.txt and the website.\n\n<!-- zerodollarlabs-build:'+sys.argv[3]+' -->\n')
-PY
-# Upload a draft first. Publish only after every asset is present. A failed upload leaves a draft to inspect.
-PRE=(--prerelease=false); [[ "$RELEASE_VERSION" != *-* ]] || PRE=(--prerelease)
-gh release create "v$RELEASE_VERSION" --repo "$REPO" --verify-tag --draft "${PRE[@]}" \
-  --title "Dynamic Island $RELEASE_VERSION" --notes-file "$WORK_DIR/release-body.md" \
-  "$ARTIFACT_DIR/"*
-if [[ "$RELEASE_VERSION" == *-* ]]; then
-  gh release edit "v$RELEASE_VERSION" --repo "$REPO" --draft=false --prerelease --latest=false
-else
-  gh release edit "v$RELEASE_VERSION" --repo "$REPO" --draft=false --latest
+[[ "${SITE_REPO:-}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || fail 'Set SITE_REPO=owner/site-repo in .release.env.'
+APP_REPO="$(git remote get-url origin | sed -E 's#^https://github.com/##; s#^git@github.com:##; s#\.git$##')"
+[[ "$APP_REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || fail 'origin must be a GitHub repository URL.'
+[[ "$APP_REPO" != "$SITE_REPO" ]] || fail 'The app and website must have separate private repositories.'
+for tool in security gh python3 ditto hdiutil shasum; do command -v "$tool" >/dev/null || fail "Missing $tool."; done
+security find-identity -v -p codesigning | grep -F -- "$SIGNING_IDENTITY" >/dev/null || fail "Signing identity $SIGNING_IDENTITY is missing."
+gh auth status >/dev/null 2>&1 || fail 'Run gh auth login first.'
+[[ "$(gh api "repos/$APP_REPO" --jq .private)" == true ]] || fail 'App repository must be PRIVATE.'
+if [[ "$MODE" != --no-publish ]]; then
+  [[ "$(gh api "repos/$APP_REPO/commits/main" --jq .sha)" == "$(git rev-parse HEAD)" ]] || fail 'Push the reviewed main commit yourself before publishing; the remote source must match the local build.'
 fi
-python3 - "$DMG" "$RELEASE_VERSION" <<'PY'
-import hashlib,pathlib,sys
-p=pathlib.Path(sys.argv[1]);print(f'Website: version={sys.argv[2]} size={p.stat().st_size} bytes sha256={hashlib.sha256(p.read_bytes()).hexdigest()}')
-print('Public feed: '+__import__('os').environ['SITE_URL'].rstrip('/')+'/downloads/notch/appcast.xml')
+TOOLS="$ROOT/.build/artifacts/sparkle/Sparkle/bin"
+for tool in generate_keys generate_appcast; do [[ -x "$TOOLS/$tool" ]] || fail "Missing Sparkle tool: $TOOLS/$tool (resolve SwiftPM first)."; done
+git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION" && fail 'Tag already exists locally. Bump the version.'
+mkdir -p "$ROOT/build"
+TMP="$(mktemp -d "$ROOT/build/preflight.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+# Treat an unavailable history as a failure, never an empty release history.
+gh api --paginate "repos/$APP_REPO/tags?per_page=100" --jq '.[].name' > "$TMP/tags"
+! grep -Fx "v$RELEASE_VERSION" "$TMP/tags" >/dev/null || fail 'Tag already exists remotely. Bump the version.'
+LATEST="$(python3 - "$TMP/tags" <<'PY'
+import pathlib,re,sys
+v=[x for x in pathlib.Path(sys.argv[1]).read_text().splitlines() if re.fullmatch(r'v\d+\.\d+\.\d+',x)]
+print(max(v,key=lambda x:tuple(map(int,x[1:].split('.')))) if v else '')
 PY
+)"
+BASELINE=0
+if [[ -n "$LATEST" ]]; then
+  mkdir -p "$TMP/previous"
+  gh release download "$LATEST" --repo "$APP_REPO" --pattern appcast.xml --dir "$TMP/previous"
+  BASELINE="$(python3 - "$TMP/previous/appcast.xml" <<'PYBUILD'
+import pathlib,re,sys,xml.etree.ElementTree as ET
+S='http://www.andymatuschak.org/xml-namespaces/sparkle'
+item=ET.parse(sys.argv[1]).find('./channel/item')
+if item is None:sys.exit('Cannot read latest tag build from its appcast')
+enc=item.find('enclosure');value=item.findtext('{'+S+'}version') or (enc.get('{'+S+'}version') if enc is not None else None)
+if not re.fullmatch(r'[1-9]\d*',value or ''):sys.exit('Latest tag appcast has no integer build')
+print(value)
+PYBUILD
+)"
+fi
+python3 - "$RELEASE_BUILD" "$BASELINE" <<'PY'
+import plistlib,pathlib,sys
+current=int(sys.argv[1]);previous=int(sys.argv[2]);committed=int(plistlib.loads(pathlib.Path('Resources/Info.plist').read_bytes())['CFBundleVersion'])
+if current<=previous or current<committed:sys.exit(f'Preflight failed: build {current} must exceed latest tag build {previous} and be at least committed build {committed}.')
+PY
+export SPARKLE_PUBLIC_ED_KEY="$("$TOOLS/generate_keys" -p)"
+if [[ "$MODE" != --publish-only ]]; then
+  ./build.sh
+  ./scripts/package-artifacts.sh "$RELEASE_VERSION" "$RELEASE_BUILD"
+else
+  ./scripts/verify-release.sh "$ROOT/dist"
+fi
+if [[ "$MODE" == --no-publish ]]; then
+  echo 'Verified dry run: not published. Review dist/ before publishing.'
+  exit 0
+fi
+# Exactly the five verified contract assets; never upload arbitrary files or secrets.
+gh release create "v$RELEASE_VERSION" dist/* --repo "$APP_REPO" --title "$NAME $RELEASE_VERSION" --notes-file dist/release-notes.md --draft=false --prerelease=false --target "$(git rev-parse HEAD)"
+echo "Release: https://github.com/$APP_REPO/releases/tag/v$RELEASE_VERSION"
+echo 'The app-released notifier triggers the site rebuild. Check both workflow runs.'

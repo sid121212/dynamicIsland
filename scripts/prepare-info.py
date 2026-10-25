@@ -5,7 +5,8 @@ from urllib.parse import urlparse
 root = pathlib.Path(__file__).resolve().parent.parent
 config = json.loads((root/'release.config.json').read_text())
 info = plistlib.loads((root/'Resources/Info.plist').read_bytes())
-site = os.environ.get('SITE_URL','').rstrip('/')
+site = os.environ.get('SITE_URL','')
+if site.endswith('/'): sys.exit('SITE_URL must not have a trailing slash')
 url = urlparse(site)
 if url.scheme != 'https' or not url.hostname or url.path or url.query or url.fragment or url.username or url.port or re.search(r'(^|\.)(example\.(com|org|net)|localhost)$|placeholder',url.hostname,re.I) or re.search(r'github|git\.io',url.hostname,re.I): sys.exit('Set SITE_URL to your final public HTTPS origin (no placeholder)')
 contact = os.environ.get('CONTACT_EMAIL','')
@@ -24,5 +25,5 @@ notarized=os.environ.get('NOTARIZED','0')
 if notarized not in ('0','1'): sys.exit('NOTARIZED must be 0 or 1')
 info.update(SUFeedURL=f'{site}/downloads/{slug}/appcast.xml',ZDLContactEmail=contact,ZDLSiteURL=site,SUPublicEDKey=key,
             SUEnableAutomaticChecks=True,SUScheduledCheckInterval=86400,
-            CFBundleVersion=build,CFBundleShortVersionString=version,NSHumanReadableCopyright='© '+str(__import__('datetime').date.today().year)+' Zero Dollar Labs')
+            CFBundleVersion=build,CFBundleShortVersionString=version,LSMinimumSystemVersion='15.0',NSHumanReadableCopyright='© '+str(__import__('datetime').date.today().year)+' Zero Dollar Labs')
 if len(sys.argv)>1: pathlib.Path(sys.argv[1]).write_bytes(plistlib.dumps(info,fmt=plistlib.FMT_XML))

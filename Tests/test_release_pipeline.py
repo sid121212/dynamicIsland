@@ -36,49 +36,60 @@ class ReleaseChecks(unittest.TestCase):
  def test_signer_rejects_adhoc(self):
   proc=subprocess.run([str(ROOT/'scripts/sign-app.sh'),'/nonexistent.app'],env={**os.environ,'SIGNING_IDENTITY':'-'},capture_output=True,text=True)
   self.assertNotEqual(proc.returncode,0);self.assertIn('Ad-hoc',proc.stderr)
- def test_publish_is_draft_first_and_betas_are_not_latest(self):
+ def test_local_release_modes_and_preflight(self):
   import shutil
-  for version in ('1.2.3','1.2.3-beta.1'):
-   with self.subTest(version=version),tempfile.TemporaryDirectory() as temp:
-    fixture=pathlib.Path(temp);(fixture/'scripts').mkdir();(fixture/'build').mkdir();(fixture/'Resources').mkdir();(fixture/'docs/release-notes').mkdir(parents=True);mock=fixture/'mock';mock.mkdir()
-    for name in ('release.sh','prepare-info.py'):shutil.copy(ROOT/'scripts'/name,fixture/'scripts'/name)
-    shutil.copy(ROOT/'release.config.json',fixture/'release.config.json');shutil.copy(ROOT/'Resources/Info.plist',fixture/'Resources/Info.plist')
-    (fixture/f'docs/release-notes/{version}.html').write_text('<h2>Release notes</h2>')
-    def executable(path,text):path.write_text(text);path.chmod(0o755)
-    executable(fixture/'build.sh','#!/bin/bash\nexit 0\n')
-    executable(fixture/'scripts/package-artifacts.sh','''#!/bin/bash
-set -e
-mkdir -p "dist/$1"
-for file in "DynamicIsland-$1.dmg" "DynamicIsland-$1.zip" "DynamicIsland-$1.dmg.sha256" "DynamicIsland-$1.html" appcast.xml; do printf 'fixture' > "dist/$1/$file"; done
+  with tempfile.TemporaryDirectory() as temp:
+   fixture=pathlib.Path(temp)
+   for name in ('scripts','release','Resources','build','.build/artifacts/sparkle/Sparkle/bin','mock'):(fixture/name).mkdir(parents=True,exist_ok=True)
+   shutil.copy(ROOT/'scripts/release.sh',fixture/'scripts/release.sh')
+   shutil.copy(ROOT/'release/config.sh',fixture/'release/config.sh')
+   shutil.copy(ROOT/'Resources/Info.plist',fixture/'Resources/Info.plist')
+   def executable(path,text):path.write_text(text);path.chmod(0o755)
+   executable(fixture/'build.sh','#!/bin/bash\necho build >> "$MOCK_LOG"\n')
+   executable(fixture/'scripts/verify-release.sh','#!/bin/bash\necho verify >> "$MOCK_LOG"\n')
+   executable(fixture/'scripts/package-artifacts.sh','''#!/bin/bash
+mkdir -p dist
+for n in "Notch-$1.dmg" "Notch-$1.zip" "Notch-$1.dmg.sha256" appcast.xml release-notes.md; do echo fixture > "dist/$n"; done
+scripts/verify-release.sh dist
 ''')
-    executable(mock/'gh','''#!/usr/bin/env python3
-import os,json,sys
+   executable(fixture/'mock/git','''#!/bin/bash
+case "$1" in
+ branch) echo main;;
+ status) echo -n "${MOCK_DIRTY:-}";;
+ remote) echo https://github.com/example/notch.git;;
+ rev-parse) echo fixture-head;;
+ show-ref) exit 1;;
+esac
+''')
+   executable(fixture/'mock/gh','''#!/usr/bin/env python3
+import json,os,pathlib,sys
 args=sys.argv[1:]
 with open(os.environ['MOCK_LOG'],'a') as f:f.write(json.dumps(args)+'\\n')
-if args[:2]==['release','view']:sys.exit(1)
-if args[0]=='api':print('<!-- zerodollarlabs-build:11 -->')
+if args[0]=='api':
+ if args[-1]=='.private':print('true')
+ elif '/commits/main' in args[1]:print('fixture-head')
+ else:print('v0.9.0')
+if args[:2]==['release','download']:
+ p=pathlib.Path(args[args.index('--dir')+1]);p.mkdir(exist_ok=True)
+ (p/'appcast.xml').write_text('<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><sparkle:version>12</sparkle:version></item></channel></rss>')
 ''')
-    executable(mock/'git','''#!/bin/bash
-if [[ "$1" == rev-parse ]]; then printf 'fixture-head\\n'; fi
-''')
-    for name in ('codesign','hdiutil','ditto','cmake'):executable(mock/name,'#!/bin/sh\nexit 0\n')
-    executable(fixture/'create-dmg','#!/bin/sh\nexit 0\n')
-    env={**os.environ,'PATH':str(mock)+':'+os.environ['PATH'],'MOCK_LOG':str(fixture/'calls'),'CREATE_DMG':str(fixture/'create-dmg'),'RELEASE_REPOSITORY':'example/notch','SIGNING_IDENTITY':'mock-only','SITE_URL':'https://downloads.test.invalid','CONTACT_EMAIL':'support@test.invalid'}
-    result=subprocess.run([str(fixture/'scripts/release.sh'),version,'12'],env=env,capture_output=True,text=True)
-    self.assertEqual(result.returncode,0,result.stderr)
-    calls=[json.loads(line) for line in (fixture/'calls').read_text().splitlines()]
-    create=next(c for c in calls if c[:2]==['release','create']);edit=next(c for c in calls if c[:2]==['release','edit'])
-    self.assertIn('--draft',create);self.assertIn('--draft=false',edit)
-    self.assertLess(calls.index(create),calls.index(edit))
-    self.assertIn('--latest=false' if '-beta' in version else '--latest',edit)
-    self.assertTrue(any(c.endswith('appcast.xml') for c in create))
-    # Reusing a published integer build must stop before packaging or creating a release.
+   executable(fixture/'mock/security','#!/bin/sh\necho NotchDev\n')
+   for name in ('ditto','hdiutil','shasum'):executable(fixture/'mock'/name,'#!/bin/sh\nexit 0\n')
+   for name in ('generate_keys','generate_appcast'):executable(fixture/'.build/artifacts/sparkle/Sparkle/bin'/name,'#!/bin/sh\necho fixture-public-key\n')
+   env={**os.environ,'PATH':str(fixture/'mock')+':'+os.environ['PATH'],'MOCK_LOG':str(fixture/'calls'),'SITE_URL':'https://downloads.test.invalid','SITE_REPO':'example/site'}
+   for mode in ('--no-publish','--publish-only',''):
     (fixture/'calls').write_text('')
-    blocked=subprocess.run([str(fixture/'scripts/release.sh'),version,'11'],env=env,capture_output=True,text=True)
-    self.assertNotEqual(blocked.returncode,0)
-    self.assertIn('greater than every published build',blocked.stderr)
-    rejected=[json.loads(line) for line in (fixture/'calls').read_text().splitlines()]
-    self.assertFalse(any(c[:2]==['release','create'] for c in rejected))
+    args=[str(fixture/'scripts/release.sh'),'1.0.0','13']+([mode] if mode else [])
+    result=subprocess.run(args,env=env,capture_output=True,text=True)
+    self.assertEqual(result.returncode,0,result.stderr)
+    calls=(fixture/'calls').read_text()
+    self.assertIn('verify',calls)
+    self.assertEqual('build\n' in calls,mode!='--publish-only')
+    self.assertEqual('["release", "create"' in calls,mode!='--no-publish')
+    if mode!='--no-publish':self.assertIn('--draft=false',calls);self.assertIn('--prerelease=false',calls);self.assertIn('Notch 1.0.0',calls)
+   for version,build,extra,reason in [('1.0.0','12',{},'must exceed'),('1.0.0-beta','13',{},'semver'),('1.0.0','13',{'MOCK_DIRTY':' M source.swift'},'clean on main')]:
+    result=subprocess.run([str(fixture/'scripts/release.sh'),version,build,'--no-publish'],env={**env,**extra},capture_output=True,text=True)
+    self.assertNotEqual(result.returncode,0);self.assertIn(reason,result.stderr)
  def test_size_limit_boundary(self):
   with tempfile.TemporaryDirectory() as temp:
    path=pathlib.Path(temp)/'fixture.zip'

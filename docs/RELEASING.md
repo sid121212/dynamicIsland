@@ -41,21 +41,72 @@ The default command creates the pair only when none exists, stores the private k
 The provided public key alone cannot sign an update. A lost EdDSA key without a Developer ID recovery path can require a manual reinstall; preserve the private key and certificate across machines and releases. Do not rotate the signing certificate or public key without testing a migration.
 
 
-## Private release and public mirror pipeline
+## One-command local releases
 
-App repository Actions secrets: `SIGNING_P12_BASE64`, `SIGNING_P12_PASSWORD`, `SPARKLE_ED_PRIVATE_KEY`, and `SITE_DISPATCH_TOKEN` (fine-grained contents-write access to the private site repo). Variables: `SITE_URL`, `CONTACT_EMAIL`, optional `SITE_REPOSITORY` (defaults to `sid121212/zero-dollar-labs`), optional `SPARKLE_PUBLIC_ED_KEY`. The certificate is imported in a temporary keychain, trusted only for code signing on that runner, and removed on exit. No Homebrew or Apple Developer Program is used.
+The app repository is derived from `git remote get-url origin`; it must be private and different from the website repository. `release/config.sh` owns `SLUG=notch`, `NAME=Notch`, `ASSET_BASE=Notch`. Never use the website repository for app releases.
 
-Site repo and hosting build secret: `RELEASES_READ_TOKEN`, read-only contents/releases access to all private app repos. Site repo secret: `SITE_DEPLOY_HOOK_URL`, the Cloudflare Pages build hook. The site repository and hosting build read the origin only from `NEXT_PUBLIC_SITE_URL`; app repositories read it only from `SITE_URL`. The website contact address is stored once as `CONTACT_EMAIL` in site.config.ts; app repositories store the matching address in the `CONTACT_EMAIL` variable. Never expose release tokens using a public environment-variable prefix.
+Initial setup (no Homebrew): install GitHub CLI from its official distribution, run `gh auth login`, then:
 
-1. Set a new `CFBundleShortVersionString` and strictly increasing integer `CFBundleVersion` in Resources/Info.plist, write `docs/release-notes/<version>.html`, commit, and tag that exact clean commit `v<version>`.
-2. Push the tag to run release.yml, or check out the clean tagged commit and run `SITE_URL=https://your-real-host CONTACT_EMAIL=your-address scripts/release.sh <version> <build>`. Release.sh publishes; use package-artifacts.sh only for packaging an already-built app.
-3. The release creates the DMG with a drag-to-Applications layout and a ZIP using ditto. Both must be **strictly smaller than 25 MiB**. Sizes print before appcast generation; oversized files stop publication.
-4. Sparkle generates the appcast from an isolated folder containing one ZIP plus its HTML notes. Enclosures must match the site prefix and expected version/build/length. An independent CryptoKit verification checks the ZIP's EdDSA signature against the app's public key.
-5. Assets include DMG, ZIP, appcast.xml, release-notes.md, HTML notes and a `.sha256` sidecar for every non-sidecar file. Extra sidecars let the site verify the ZIP, appcast and notes as well as the DMG. A draft release is published only after uploads succeed. Beta tags are pre-releases and never become latest stable.
-6. The final release.yml step dispatches `app-released` with slug/version to the site repo. Dispatch failure fails the job; the release remains published. Retry only the failed dispatch step, not immutable artifact publication.
-7. Site CI/hosting runs fetch-releases.ts, verifies all required assets, retains three non-draft releases, mirrors only the stable feed, prunes other files, generates releases.json and 302 redirects, exports and scans the site. No users receive upstream URLs. Daily site rebuilds perform the same mirror operation. A stable release must remain within the three retained releases.
-8. Site CI calls the deploy hook after passing guards; Cloudflare builds from the same commit with the private read token. Confirm production deployment completion and run the public download/update checks.
+```sh
+scripts/bootstrap-release-tools.sh
+cp .release.env.example .release.env
+# Edit SITE_URL, SITE_REPO, CONTACT_EMAIL and optional SIGN_IDENTITY.
+```
 
-The daily healthcheck follows only the site's `/download/notch/` and `/downloads/notch/appcast.xml` URLs. GitHub is used solely to create/comment on the private maintenance issue when they fail.
+`.release.env` is ignored. Use the final HTTPS origin without a trailing slash; installed apps depend on `/downloads/notch/appcast.xml` staying stable. Exported environment variables can also supply the configuration. This file contains no token or private key. Set `CONTACT_EMAIL` for editable problem-report drafts. Keep the self-signed certificate and matching Sparkle private key in your login Keychain; the script reads only the public key via `generate_keys -p` and lets Sparkle sign privately through Keychain.
 
-No public feed exists until hosting is configured and deployed. Do not invent a hostname or publish a QA build. Never overwrite a published versioned artifact. Run the clean-Mac test in TESTING.md before claiming auto-updates work end to end.
+Add reviewed release notes under `## 1.0.0` in `CHANGELOG.md` (or enter them interactively). Review source changes and commit them yourself on main. The script never commits or pushes. Do not create the release tag manually: `gh release create` creates it from the matching remote main commit. Before publication, local HEAD must already be pushed to origin/main so released source matches the built app. A --no-publish dry run can use a clean local commit before pushing.
+
+Normal release (example build 12; always choose a build greater than the latest released build and at least the committed Info.plist build):
+
+```sh
+scripts/release.sh 1.0.0 12
+```
+
+Dry run / local packaging only:
+
+```sh
+scripts/release.sh 1.0.0 12 --no-publish
+ls -lh dist/
+scripts/verify-release.sh dist/
+```
+
+Publish an already verified dist after rechecking every contract rule:
+
+```sh
+scripts/release.sh 1.0.0 12 --publish-only
+```
+
+Preflight requires clean main, X.Y.Z semver, a positive increasing build, a valid HTTPS origin without trailing slash, signing identity, authenticated gh, a private app repository, existing Sparkle tools, and no local/remote release tag. It reads the latest semver tag's published appcast to find its actual build (source Info.plist may be a build-time template). API failures stop the release. Build 1 is not valid for this repository: its committed baseline is already 11.
+
+Archive old dist contents outside dist before starting a new version; the packager refuses to overwrite or mix artifacts. Every artifact must be strictly under 26,214,400 bytes. Exactly these five files are published:
+
+- `Notch-X.Y.Z.dmg`
+- `Notch-X.Y.Z.zip`
+- `Notch-X.Y.Z.dmg.sha256` (one line, hex digest, two spaces, DMG filename)
+- `appcast.xml` (one item, this version/build only, embedded notes and signed ZIP)
+- `release-notes.md`
+
+The app is built arm64, stamped before signing with version/build, macOS 15.0, the current public Sparkle key and the unchanged site feed URL, signed inside-out with NotchDev, and strictly verified. DMG root and app Resources must contain both license files. Verification mounts the finished DMG, parses XML/binary Info.plist from the ZIP, compares its key/feed/version/build, checks the checksum and archive length, and independently verifies EdDSA before publication. The release title is `Notch X.Y.Z`, tag `vX.Y.Z`, published stable (neither draft nor pre-release).
+
+## Website notification and deployment
+
+No macOS Actions build job is needed. `.github/workflows/notify-site.yml` runs on published releases (or manual dispatch) and sends `app-released` to the configured `SITE_REPO`; it requires exactly HTTP 204. App repo secret `SITE_DISPATCH_TOKEN` needs permission to dispatch into the private website repository (fine-grained Contents write); variable `SITE_REPO=owner/zero-dollar-labs`. Keep SITE_URL and CONTACT_EMAIL configured as repo variables for health checks/other app automation.
+
+Site repo secret `RELEASES_READ_TOKEN` has read-only Contents access to each app repository. Site variables include NEXT_PUBLIC_SITE_URL and other NEXT_PUBLIC values; the site-only public key belongs in private build config tools.ts. The site's deploy.yml builds on main push, app-released dispatch, daily schedule and manual dispatch, validates releases and public-host/SEO guards, then deploys using CLOUDFLARE_API_TOKEN (secret) and CLOUDFLARE_ACCOUNT_ID (variable). The site retains three newest stable semver releases under the existing public paths. Visitors never need the private repository.
+
+A failed notifier does not undo a published release. Retry the notifier manually; never rerun publishing for that version. A failed site build keeps the prior deployed website intact.
+
+## Fix-forward and rollback
+
+Never edit or re-upload a published artifact. Bump the patch version and integer build, add reviewed notes, archive old dist, commit and push source yourself, then release again:
+
+```sh
+scripts/release.sh 1.0.1 13 --no-publish
+scripts/verify-release.sh dist/
+scripts/release.sh 1.0.1 13 --publish-only
+```
+
+For rollback, manually mark the bad release as pre-release or delete it, then manually rerun the site Deploy website workflow so the public mirror falls back to the previous stable version. Removing a release does not downgrade already-installed apps; publish a fixed version with a higher build for those users. Do not rewrite the feed URL.
+
+The daily healthcheck follows the site's `/download/notch/` and `/downloads/notch/appcast.xml` URLs. No publication/deployment or clean-Mac update is implied by successful local packaging. Complete TESTING.md before claiming installed updates work end to end.
